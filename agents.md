@@ -77,7 +77,7 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
 
 - [x] **Fase 0: Documentación estratégica** (arquitectura, API spec, modelo de datos, guía de
       estilo, plan de pruebas).
-- [ ] **Fase 1: Configuración inicial** (entornos, Docker Compose, Alembic, Git).
+- [x] **Fase 1: Configuración inicial** (entornos, Docker Compose, Alembic, Git).
 - [ ] **Fase 2 — Módulo 1: Cuentas y Tarjetas** (CRUD + validación de ciclos de facturación).
 - [ ] **Fase 2 — Módulo 2: Transacciones y Cuotas** (movimientos, transferencias, cuotas).
 - [ ] **Fase 2 — Módulo 3: Dashboard y Reportes** (agregaciones, gráficos, flujo de caja
