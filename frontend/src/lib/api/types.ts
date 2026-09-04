@@ -121,3 +121,49 @@ export interface CardStatement {
   total_amount: string
   payment_transaction_id: number | null
 }
+
+export interface ExchangeRate {
+  id: number
+  from_currency: string
+  to_currency: string
+  rate: string
+  date: string
+}
+
+export interface ExchangeRateCreateInput {
+  from_currency: string
+  to_currency: string
+  rate: string
+  date: string
+}
+
+export interface UnconvertedAmount {
+  currency: string
+  amount: string
+}
+
+export interface DashboardSummary {
+  reference_currency: string
+  month: string
+  total_balance: string
+  month_income: string
+  month_expenses: string
+  unconverted_balances: UnconvertedAmount[]
+}
+
+export interface CategorySpending {
+  category_id: number | null
+  category_name: string
+  icon: string | null
+  total: string
+}
+
+export interface CashFlowMonth {
+  month: string
+  committed_amount: string
+}
+
+export interface CashFlowProjection {
+  reference_currency: string
+  projection: CashFlowMonth[]
+}

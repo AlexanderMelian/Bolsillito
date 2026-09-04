@@ -94,6 +94,19 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
   crédito nunca aparecía en `GET /cards/{id}/statements` ni se podía pagar. Si se agrega un nuevo
   punto de entrada que cree una `Transaction` con `card_id` de una tarjeta de crédito, hay que
   acordarse de esto.
+- Conversión de moneda (`app/services/exchange_rates.py`): el dashboard convierte todo a la
+  cotización más reciente disponible **a hoy**, no a la fecha del movimiento -- es una app de
+  carga manual, el usuario típicamente solo carga la cotización del día, así que pedir la tasa
+  "de la fecha del gasto" fallaría casi siempre para movimientos pasados. `convert()` también
+  prueba la tasa inversa si no se cargó la directa (ej. se cargó ARS→USD pero se necesita
+  USD→ARS). El resultado de `convert()` siempre se redondea a centavos -- multiplicar un monto
+  de 2 decimales por una cotización de 6 deja un `Decimal` con hasta 8, y eso rompe la
+  serialización esperada por el frontend.
+- Los reportes de ingreso/gasto del dashboard (`/dashboard/summary`,
+  `/dashboard/spending-by-category`) excluyen las `Transaction` que son el pago de un resumen
+  (`Transaction.id` referenciado desde `CardStatement.payment_transaction_id`) -- si no se
+  excluyeran, una compra en cuotas se contaría como gasto dos veces: una al comprar, otra al
+  pagar el resumen.
 
 ### Frontend (React / TypeScript / Tailwind)
 - Componentes funcionales + hooks. Sin clases.
@@ -117,6 +130,19 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
   Los componentes que usan el `Select` de shadcn (Radix) necesitan los polyfills de
   `hasPointerCapture`/`scrollIntoView` ya cargados en `src/setupTests.ts` — si un test nuevo
   interactúa con un `Select` y jsdom tira un error de puntero, es por esto.
+- Routing con `react-router-dom` (`BrowserRouter` en `main.tsx`, rutas en `App.tsx`): páginas en
+  `app/pages/`, nav compartida en `app/Nav.tsx`. Un componente de página solo compone
+  features + sus dialogs, no tiene lógica propia.
+- Gráficos con Recharts siguiendo la skill `dataviz`: paleta categórica validada
+  (`node .../dataviz/scripts/validate_palette.js`) pisada sobre los tokens `--chart-1..5` de
+  shadcn en `index.css` (el `shadcn init` por defecto deja esos tokens en gris puro, chroma 0 —
+  inusables). Magnitud de una sola serie (gasto por categoría, cuotas comprometidas) va con
+  **un solo hue secuencial** (`--chart-1`, azul), nunca arcoíris por categoría — ver
+  `references/choosing-a-form.md` de la skill. Gridlines/ejes usan `var(--border)` /
+  `var(--muted-foreground)` (ya son grises neutros, no hace falta agregar tokens nuevos).
+  `ResponsiveContainer` de Recharts no mide nada en jsdom (no hay layout real), así que los
+  tests de estos componentes no pueden verificar las barras SVG en sí -- se testean los
+  estados de carga/error/vacío y que el título/mensaje correcto se muestre.
 
 ---
 
@@ -127,7 +153,7 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
 - [x] **Fase 1: Configuración inicial** (entornos, Docker Compose, Alembic, Git).
 - [x] **Fase 2 — Módulo 1: Cuentas y Tarjetas** (CRUD + validación de ciclos de facturación).
 - [x] **Fase 2 — Módulo 2: Transacciones y Cuotas** (movimientos, transferencias, cuotas).
-- [ ] **Fase 2 — Módulo 3: Dashboard y Reportes** (agregaciones, gráficos, flujo de caja
+- [x] **Fase 2 — Módulo 3: Dashboard y Reportes** (agregaciones, gráficos, flujo de caja
       proyectado).
 - [ ] **Fase 2 — Módulo 4: Inversiones** (portafolio, precio promedio ponderado).
 
