@@ -4,6 +4,7 @@ const LINKS = [
   { to: '/', label: 'Resumen', end: true },
   { to: '/cuentas', label: 'Cuentas' },
   { to: '/movimientos', label: 'Movimientos' },
+  { to: '/inversiones', label: 'Inversiones' },
 ]
 
 export function Nav() {

@@ -1,8 +1,9 @@
 # Arquitectura Técnica — Bolsillito
 
-> **Estado:** Módulos 1–3 implementados (Cuentas/Tarjetas, Transacciones/Cuotas,
-> Dashboard/Reportes). Este documento describe la arquitectura tal como quedó construida, no
-> solo la planeada en Fase 0 — ver `agents.md` § Pendientes para lo que falta (Módulo 4).
+> **Estado:** los 4 módulos del MVP implementados (Cuentas/Tarjetas, Transacciones/Cuotas,
+> Dashboard/Reportes, Inversiones). Este documento describe la arquitectura tal como quedó
+> construida, no solo la planeada en Fase 0 — ver `agents.md` § Pendientes para lo que queda
+> afuera del MVP.
 
 ## 1. Componentes
 
@@ -17,7 +18,8 @@
         ▼                                                     ▼
   stores/ (Zustand, estado de UI)                    services/ (lógica de negocio:
                                                         billing_cycle, balances,
-                                                        card_statements, exchange_rates)
+                                                        card_statements, exchange_rates,
+                                                        investments)
 ```
 
 Sin Open Banking: toda la carga de datos entra por los endpoints REST desde formularios/modales
@@ -75,6 +77,7 @@ app/
                       #   balances.py         -- efecto de una transacción sobre el saldo
                       #   card_statements.py  -- alta/cálculo de resúmenes, flujo de pago
                       #   exchange_rates.py   -- conversión de moneda
+                      #   investments.py      -- costo promedio ponderado, posición, ganancia realizada
 ```
 
 Los `routers` nunca calculan directamente: arman la respuesta a partir de lo que devuelven los
@@ -82,15 +85,25 @@ Los `routers` nunca calculan directamente: arman la respuesta a partir de lo que
 `pytest` puro (sin DB, sin HTTP) y por separado testear que el endpoint efectivamente use ese
 resultado — ver `docs/testing-plan.md`.
 
-**Cálculo vs. almacenamiento**: dos veces se decidió calcular en el momento de la consulta en
+**Cálculo vs. almacenamiento**: varias veces se decidió calcular en el momento de la consulta en
 vez de mantener un campo desnormalizado: `CardStatement.total_amount`/`status` (se recalculan en
-cada `GET`, salvo que ya esté `paid`) y los reportes del dashboard. La alternativa —mantenerlos
-actualizados en cada escritura que los afecta— es más rápida de leer pero exige acordarse de
-tocarlos desde cada punto de escritura relevante (alta de transacción, borrado, edición...); ya
-hubo un bug real por este motivo (gastos de pago único que no generaban su `CardStatement`, ver
-`agents.md`) y la superficie de "puntos que hay que acordarse de tocar" solo crece. Se prioriza
-la certeza de que el dato mostrado es correcto sobre la performance de lectura, razonable para
-el volumen de datos de una app personal.
+cada `GET`, salvo que ya esté `paid`), los reportes del dashboard, y la posición/costo
+promedio/ganancia realizada de una inversión (`services/investments.py`). La alternativa
+—mantenerlos actualizados en cada escritura que los afecta— es más rápida de leer pero exige
+acordarse de tocarlos desde cada punto de escritura relevante (alta de transacción, borrado,
+edición...); ya hubo un bug real por este motivo (gastos de pago único que no generaban su
+`CardStatement`, ver `agents.md`) y la superficie de "puntos que hay que acordarse de tocar" solo
+crece. Se prioriza la certeza de que el dato mostrado es correcto sobre la performance de
+lectura, razonable para el volumen de datos de una app personal.
+
+**FK cruda vs. `relationship()`**: `Transaction.investment_transaction_id` es una FK simple, sin
+un `relationship()` ORM que la acompañe (a diferencia de `InstallmentPlan.items`, que sí tiene
+uno). La consecuencia concreta: el unit-of-work de SQLAlchemy ordena automáticamente los
+`DELETE` en cascada cuando hay un `relationship()` de por medio, pero **no** cuando dos objetos
+comparten una FK sin relación ORM explícita — hay que borrar el lado que referencia (acá, la
+`Transaction` vinculada) con un `DELETE` inmediato (`session.execute(delete(...))`) antes de
+borrar el lado referenciado, en vez de confiar en `session.delete()` para ambos. Se encontró
+como bug real escribiendo `DELETE /investment-transactions/{id}` — ver `agents.md`.
 
 ## 5. Estructura del frontend (`frontend/src/`)
 

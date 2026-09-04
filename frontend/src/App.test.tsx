@@ -19,12 +19,20 @@ const cashFlow = {
   reference_currency: 'ARS',
   projection: [{ month: '2026-09', committed_amount: '0.00' }],
 }
+const portfolio = {
+  reference_currency: 'ARS',
+  total_cost: '0.00',
+  total_realized_gain: '0.00',
+  unconverted: [],
+  positions: [],
+}
 
 function stubFetch() {
   return vi.fn(async (url: string) => {
     if (url.includes('/dashboard/summary')) return new Response(JSON.stringify(summary), { status: 200 })
     if (url.includes('/dashboard/cash-flow-projection'))
       return new Response(JSON.stringify(cashFlow), { status: 200 })
+    if (url.includes('/portfolio')) return new Response(JSON.stringify(portfolio), { status: 200 })
     // el resto de los endpoints usados por las páginas son listados: [] es una respuesta válida
     return new Response(JSON.stringify([]), { status: 200 })
   })
@@ -65,6 +73,11 @@ describe('App routing', () => {
     await userEvent.click(screen.getAllByRole('link', { name: 'Movimientos' })[0])
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Movimientos' })).toBeInTheDocument()
+    })
+
+    await userEvent.click(screen.getAllByRole('link', { name: 'Inversiones' })[0])
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Portafolio' })).toBeInTheDocument()
     })
   })
 })

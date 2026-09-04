@@ -84,6 +84,7 @@ CREATE TABLE transactions (
     card_id                  INTEGER REFERENCES cards(id),
     category_id              INTEGER REFERENCES categories(id),
     installment_plan_id      INTEGER REFERENCES installment_plans(id),
+    investment_transaction_id INTEGER, -- FK agregada luego de crear `investment_transactions` (ver abajo)
     amount                   NUMERIC(12, 2) NOT NULL,
     currency                 CHAR(3) NOT NULL DEFAULT 'ARS',
     date                     DATE NOT NULL,
@@ -119,6 +120,10 @@ CREATE TABLE investment_transactions (
     date        DATE NOT NULL,
     CONSTRAINT ck_inv_qty_positive CHECK (quantity > 0)
 );
+
+ALTER TABLE transactions
+    ADD CONSTRAINT transactions_investment_transaction_id_fkey
+    FOREIGN KEY (investment_transaction_id) REFERENCES investment_transactions(id);
 
 CREATE TABLE exchange_rates (
     id             SERIAL PRIMARY KEY,

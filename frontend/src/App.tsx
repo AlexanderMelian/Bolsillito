@@ -3,6 +3,7 @@ import { Route, Routes } from 'react-router-dom'
 import { Nav } from '@/app/Nav'
 import { AccountsPage } from '@/app/pages/AccountsPage'
 import { DashboardPage } from '@/app/pages/DashboardPage'
+import { InvestmentsPage } from '@/app/pages/InvestmentsPage'
 import { TransactionsPage } from '@/app/pages/TransactionsPage'
 
 function App() {
@@ -26,6 +27,7 @@ function App() {
             <Route path="/" element={<DashboardPage />} />
             <Route path="/cuentas" element={<AccountsPage />} />
             <Route path="/movimientos" element={<TransactionsPage />} />
+            <Route path="/inversiones" element={<InvestmentsPage />} />
           </Routes>
         </main>
       </div>

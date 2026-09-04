@@ -107,6 +107,17 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
   (`Transaction.id` referenciado desde `CardStatement.payment_transaction_id`) -- si no se
   excluyeran, una compra en cuotas se contaría como gasto dos veces: una al comprar, otra al
   pagar el resumen.
+- **FK cruda sin `relationship()` → ordenar los `DELETE` a mano.** `Transaction.
+  investment_transaction_id` no tiene un `relationship()` ORM que lo acompañe (ver
+  `docs/architecture.md` § 4). Sin eso, el unit-of-work de SQLAlchemy no sabe que hay que borrar
+  la `Transaction` vinculada antes que la `InvestmentTransaction` que referencia, y a veces
+  flushea en el orden contrario → `ForeignKeyViolationError`. Solución: borrar el lado que
+  referencia con un `DELETE` inmediato (`await session.execute(delete(Transaction).where(...))`,
+  no `session.delete(obj)`) antes de borrar el lado referenciado -- mismo patrón que ya se usaba
+  en `DELETE /installment-plans/{id}`, pero ahí no hacía falta explicarlo porque nunca se probó
+  el caso sin `relationship()`. Si se agrega otra FK cruda entre dos entidades con borrado
+  encadenado, aplicar el mismo patrón y agregar el test que lo prueba (no alcanza con "no tira
+  error al crear", hay que probar el `DELETE`).
 
 ### Frontend (React / TypeScript / Tailwind)
 - Componentes funcionales + hooks. Sin clases.
@@ -155,7 +166,7 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
 - [x] **Fase 2 — Módulo 2: Transacciones y Cuotas** (movimientos, transferencias, cuotas).
 - [x] **Fase 2 — Módulo 3: Dashboard y Reportes** (agregaciones, gráficos, flujo de caja
       proyectado).
-- [ ] **Fase 2 — Módulo 4: Inversiones** (portafolio, precio promedio ponderado).
+- [x] **Fase 2 — Módulo 4: Inversiones** (portafolio, precio promedio ponderado).
 
 ## 🔜 Pendientes / próximos pasos
 
@@ -163,11 +174,12 @@ Lo que falta o quedó deliberadamente afuera del alcance de los Módulos 1–3, 
 re-descubrirlo desde cero en la próxima sesión:
 
 **Funcionalidad**
-- **Módulo 4 — Inversiones**: sin empezar. No hay routers/schemas para `assets` ni
-  `investment_transactions` (las tablas ya existen, ver `db/schema.sql`). El precio promedio
-  ponderado y la posición deberían calcularse al vuelo a partir de los movimientos, mismo
-  criterio que `CardStatement.total_amount` (ver `docs/architecture.md` § 4) — no guardarlos
-  como campo que se pueda desincronizar.
+- **Cotización de mercado / ganancia no realizada**: el portafolio (`/portfolio`) solo muestra
+  costo de la posición y ganancia **realizada** (de ventas concretadas) — no hay ninguna
+  integración con una cotización de mercado (a propósito: "sin Open Banking ni APIs externas").
+  Si se quiere mostrar valor actual / ganancia en papel, la opción más consistente con el resto
+  de la app es un campo de precio cargado a mano por activo (mismo patrón que
+  `exchange_rates`), no una API externa.
 - **Transferencias multi-moneda**: hoy `422` si origen y destino tienen distinta moneda
   (decisión de negocio #6). Si se pide soporte real, hay que sumar un monto en la moneda de
   destino + la cotización aplicada.
@@ -212,3 +224,13 @@ re-descubrirlo desde cero en la próxima sesión:
 7. Simplificación deliberada (Módulo 2): `card_id` en una `Transaction` solo es válido con
    `type=expense` -- no se modela un reintegro/nota de crédito a la tarjeta. Si se necesita, hay
    que revisar `services/card_statements.compute_statement_totals` (hoy solo suma gastos).
+8. Convención deliberada (Módulo 4): `InvestmentTransaction` no tiene un campo "monto total"
+   separado para dividendos -- se carga como `quantity=1`, `price=<monto total percibido>`. El
+   costo promedio ponderado en una venta **no cambia** (solo se registra la ganancia/pérdida
+   realizada de esa venta puntual); vender más de la posición actual da `422` (se valida sobre
+   el total compras-ventas, no cronológicamente por lote/FIFO).
+9. Una transacción de inversión con `account_id` genera una `Transaction` vinculada (débito en
+   compra, crédito en venta/dividendo) igual que una compra en cuotas genera su transacción de
+   registro -- ver `agents.md` (FK cruda) y `docs/api-spec.md` § Transacciones de inversión.
+   Sin `account_id`, la transacción de inversión no toca ningún saldo (uso: activos en un broker
+   que no se modela como cuenta).

@@ -146,6 +146,9 @@ class Transaction(Base):
     installment_plan_id: Mapped[int | None] = mapped_column(
         ForeignKey("installment_plans.id"), nullable=True
     )
+    investment_transaction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("investment_transactions.id"), nullable=True
+    )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))  # siempre positivo; el signo lo da `type`
     currency: Mapped[str] = mapped_column(String(3), default="ARS")
     date: Mapped[date] = mapped_column(Date)

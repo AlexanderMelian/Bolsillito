@@ -27,6 +27,14 @@ interface UiState {
   statementsCard: Card | null
   openStatements: (card: Card) => void
   closeStatements: () => void
+
+  isAssetModalOpen: boolean
+  openAssetModal: () => void
+  closeAssetModal: () => void
+
+  isInvestmentModalOpen: boolean
+  openInvestmentModal: () => void
+  closeInvestmentModal: () => void
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -55,4 +63,12 @@ export const useUiStore = create<UiState>((set) => ({
   statementsCard: null,
   openStatements: (card) => set({ statementsCard: card }),
   closeStatements: () => set({ statementsCard: null }),
+
+  isAssetModalOpen: false,
+  openAssetModal: () => set({ isAssetModalOpen: true }),
+  closeAssetModal: () => set({ isAssetModalOpen: false }),
+
+  isInvestmentModalOpen: false,
+  openInvestmentModal: () => set({ isInvestmentModalOpen: true }),
+  closeInvestmentModal: () => set({ isInvestmentModalOpen: false }),
 }))

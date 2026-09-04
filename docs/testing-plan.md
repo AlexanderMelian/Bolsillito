@@ -1,7 +1,7 @@
 # Plan de Pruebas — Bolsillito
 
-> **Estado:** 130 tests backend (100% cobertura de línea en `app/`, gate `--cov-fail-under=95`)
-> + 52 tests frontend (gate 80% líneas/statements/funcs, 70% branches) — Módulos 1, 2 y 3.
+> **Estado:** 161 tests backend (100% cobertura de línea en `app/`, gate `--cov-fail-under=95`)
+> + 63 tests frontend (gate 80% líneas/statements/funcs, 70% branches) — los 4 módulos del MVP.
 > Ambas suites en verde. Ver `backend/tests/` y `frontend/src/**/*.test.{ts,tsx}`.
 
 ## Backend (pytest)
@@ -21,6 +21,13 @@ tablas en cada test. El fixture `client` (mismo archivo) monta un `AsyncClient` 
 real con `get_session` overrideado para usar esa misma `db_session`: los tests de endpoint
 ejercitan el stack completo (router → schema → service → DB) sin mockear nada.
 
+**Ojo con los scripts de debug ad-hoc** (ej. `python -c "..."` para reproducir un bug a mano
+fuera de pytest): `app.database.async_session_factory` apunta a `DATABASE_URL` de
+`backend/.env` — la base de **desarrollo**, no `bolsillito_test`. Un script así corrido para
+investigar algo dejó datos de prueba (`AAPL`, cuentas de prueba) en la base de dev durante el
+Módulo 4; no rompe nada, pero conviene saber que pasa y no sorprenderse si aparecen filas que
+no se cargaron a mano.
+
 ### Organización por archivo
 
 | Archivo | Qué cubre |
@@ -34,6 +41,8 @@ ejercitan el stack completo (router → schema → service → DB) sin mockear n
 | `test_card_statements_api.py` | Cálculo de `total_amount`/`status` combinando cuotas + gastos de pago único, incluida la regresión de "un gasto único a crédito tiene que generar su propio resumen"; flujo de pago (débito real de la cuenta, no se puede pagar dos veces ni un resumen en `$0`). |
 | `test_exchange_rates_api.py` | Upsert de cotizaciones (mismo par+fecha actualiza en vez de fallar). |
 | `test_dashboard_api.py` | Consolidación multi-moneda (directa, inversa, sin cotización), exclusión de pagos de resumen en los reportes de ingreso/gasto, agrupación por categoría, proyección de flujo de caja (incluye meses en `$0`, excluye resúmenes pagados). |
+| `test_assets_api.py` | CRUD del catálogo de activos, `409` por ticker+tipo duplicado o por borrar un activo con transacciones. |
+| `test_investments_api.py` | Efecto sobre el saldo por tipo (compra/venta/dividendo, con y sin cuenta asociada), validaciones (moneda de la cuenta ≠ activo, vender más de lo que se tiene, fee mayor al monto neto), costo promedio ponderado a través de dos lotes, que una venta no cambie el costo promedio de lo que queda, ganancia realizada, borrado con reversión de saldo y con bloqueo si dejaría la posición negativa, consolidación multi-moneda del `/portfolio`. |
 
 ### Patrones a seguir en tests nuevos
 
@@ -86,7 +95,8 @@ correctos según los datos mockeados, no por el contenido del `<svg>`.
 | Categorías | `CategoriesList`, `CategoryFormDialog` | Alta, borrado. |
 | Movimientos | `TransactionsList`, `TransactionFormDialog`, `InstallmentPurchaseDialog` | Campos condicionales según `type` (cuenta destino solo en transferencia, tarjeta solo en gasto), preview de monto por cuota, borrado deshabilitado si está ligado a un plan de cuotas. |
 | Dashboard | `SummaryCards`, `SpendingByCategoryChart`, `CashFlowChart`, `ExchangeRatesSection` | Estados de carga/error/vacío, formato de montos, alta de cotización. |
-| Ruteo | `App.test.tsx` | Navegación entre `/`, `/cuentas`, `/movimientos`. |
+| Inversiones | `AssetsList`, `AssetFormDialog`, `InvestmentTransactionFormDialog`, `PortfolioSummary` | Alta/borrado de activos, hint de la convención de dividendos (solo visible con `type=dividend`), estado vacío ("cargá un activo primero"), totales consolidados y aviso de montos sin convertir. |
+| Ruteo | `App.test.tsx` | Navegación entre `/`, `/cuentas`, `/movimientos`, `/inversiones`. |
 | API client | `lib/api/client.test.ts` | `ApiError` en respuestas no-OK, `undefined` en `204`, mensaje genérico si el body de error no es JSON. |
 
 **Gate:** 80% líneas/statements/funcs, 70% branches (`vitest.config.ts` → `coverage.thresholds`).

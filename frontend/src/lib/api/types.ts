@@ -167,3 +167,62 @@ export interface CashFlowProjection {
   reference_currency: string
   projection: CashFlowMonth[]
 }
+
+export type AssetType = 'stock' | 'bond' | 'crypto' | 'fund' | 'other'
+export type InvestmentTxType = 'buy' | 'sell' | 'dividend'
+
+export interface Asset {
+  id: number
+  ticker: string
+  name: string
+  type: AssetType
+  currency: string
+}
+
+export interface AssetCreateInput {
+  ticker: string
+  name: string
+  type: AssetType
+  currency?: string
+}
+
+export interface InvestmentTransaction {
+  id: number
+  asset_id: number
+  account_id: number | null
+  type: InvestmentTxType
+  quantity: string
+  price: string
+  fee: string
+  date: string
+}
+
+export interface InvestmentTransactionCreateInput {
+  asset_id: number
+  account_id?: number | null
+  type: InvestmentTxType
+  quantity: string
+  price: string
+  fee?: string
+  date: string
+}
+
+export interface AssetPosition {
+  asset_id: number
+  ticker: string
+  name: string
+  type: AssetType
+  currency: string
+  quantity: string
+  avg_cost: string
+  total_cost: string
+  realized_gain: string
+}
+
+export interface Portfolio {
+  reference_currency: string
+  total_cost: string
+  total_realized_gain: string
+  unconverted: UnconvertedAmount[]
+  positions: AssetPosition[]
+}

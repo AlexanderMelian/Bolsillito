@@ -1,7 +1,8 @@
 # Especificación de API — Bolsillito
 
-> **Estado:** implementado y testeado — Módulos 1, 2 y 3 (Cuentas/Tarjetas, Transacciones/Cuotas,
-> Dashboard/Reportes). Pendiente: Módulo 4 (Inversiones) — ver `agents.md` § Pendientes.
+> **Estado:** implementado y testeado — los 4 módulos del MVP (Cuentas/Tarjetas,
+> Transacciones/Cuotas, Dashboard/Reportes, Inversiones). Ver `agents.md` § Pendientes para lo
+> que queda afuera del MVP (CI, tema oscuro, transferencias multi-moneda).
 
 La fuente de verdad interactiva es el OpenAPI que expone FastAPI en `/docs` (Swagger UI) y
 `/redoc` con el backend corriendo. Este documento es la referencia legible sin levantar nada,
@@ -284,10 +285,79 @@ calculado (ver `/cards/{id}/statements` más arriba) de los `CardStatement` no p
 
 ---
 
-## Pendiente (Módulo 4 — Inversiones)
+## Activos — `/assets`
 
-`assets` e `investment_transactions` ya existen como tablas (ver `db/schema.sql`) pero **no**
-tienen routers/schemas todavía — no hay `/assets` ni `/investment-transactions` implementados.
-Cuando se construya ese módulo, el precio promedio ponderado y la posición se calculan al vuelo
-a partir de `investment_transactions` (mismo criterio que `CardStatement.total_amount`: nunca un
-campo desnormalizado que se pueda desincronizar).
+CRUD estándar (`GET`, `POST`→`201`, `GET/{id}`, `PATCH/{id}`, `DELETE/{id}`→`204`).
+**`AssetCreate`**: `ticker: str`, `name: str`, `type: "stock"|"bond"|"crypto"|"fund"|"other"`,
+`currency: str = "USD"`. `(ticker, type)` es único — `409` si se repite. `DELETE` da `409` si el
+activo tiene transacciones cargadas.
+
+---
+
+## Transacciones de inversión — `/investment-transactions` y `/portfolio`
+
+| Método | Path | Query | Notas |
+|---|---|---|---|
+| GET | `/investment-transactions` | `asset_id`, `account_id` (opcionales) | Ordenadas por fecha descendente. |
+| POST | `/investment-transactions` | — | `201`. Ver validaciones y efecto sobre el saldo abajo. |
+| GET | `/investment-transactions/{id}` | — | `404`. |
+| DELETE | `/investment-transactions/{id}` | — | `204`. Revierte el efecto sobre el saldo. `409` si dejaría la posición del activo en negativo. |
+| GET | `/portfolio` | — | Posiciones actuales consolidadas en la moneda de referencia. |
+
+**`InvestmentTransactionCreate`**: `asset_id: int`, `account_id: int?` (opcional — si no se
+manda, la transacción queda registrada sin afectar ningún saldo), `type: "buy"|"sell"|"dividend"`,
+`quantity: Decimal` (> 0), `price: Decimal` (> 0), `fee: Decimal = "0.00"` (≥ 0), `date: str`.
+
+Para un **dividendo**, `quantity * price` es el monto total percibido — la convención más simple
+es cargar `quantity=1` y `price=<monto total>` (el schema no tiene un campo "monto" separado, ver
+`agents.md`).
+
+Validado en el router: el activo tiene que existir (`404`); si hay `account_id`, la cuenta tiene
+que existir (`404`) y su moneda tiene que coincidir con la del activo (`422`); una venta no puede
+superar la posición actual del activo (`422`, calculada sobre el total de compras menos ventas,
+sin importar el orden cronológico); el monto neto de la operación (lo que efectivamente entra o
+sale de la cuenta) tiene que ser mayor a `0` (`422` — cubre, por ejemplo, una venta cuyo `fee`
+supera lo obtenido).
+
+**Efecto sobre el saldo** (solo si se manda `account_id`): se crea una `Transaction` con
+`investment_transaction_id` seteado —`expense` por `quantity*price + fee` en una compra,
+`income` por `quantity*price - fee` en una venta o dividendo— y se aplica igual que cualquier
+otro movimiento (`services/balances.py`). Sin `account_id`, la transacción de inversión no
+genera ningún movimiento de caja.
+
+**`DELETE`**: revierte el efecto sobre el saldo (si tenía `account_id`) y borra la `Transaction`
+vinculada con un `DELETE` inmediato (no cascada — la FK no tiene `ON DELETE CASCADE` a
+propósito). También valida que borrar esta transacción no deje la posición neta del activo en
+negativo (ej. borrar una compra de la que ya se vendió parte) — en ese caso, `409`.
+
+### `GET /portfolio`
+
+Solo lista activos con al menos una transacción. El precio promedio ponderado, la cantidad y la
+ganancia realizada **se calculan en cada consulta** a partir de `investment_transactions` (mismo
+criterio que `CardStatement.total_amount`: nunca un campo desnormalizado que se pueda
+desincronizar) — ver el algoritmo en `docs/architecture.md` § Estructura del backend.
+
+Como el resto del dashboard, los montos se consolidan en `reference_currency` vía
+`services/exchange_rates.py`; lo que no se puede convertir queda en `unconverted`.
+
+```json
+{
+  "reference_currency": "ARS",
+  "total_cost": "1500000.00",
+  "total_realized_gain": "45000.00",
+  "unconverted": [],
+  "positions": [
+    {
+      "asset_id": 1, "ticker": "AAPL", "name": "Apple", "type": "stock", "currency": "USD",
+      "quantity": "10.00000000", "avg_cost": "150.00000000", "total_cost": "1500.00",
+      "realized_gain": "0.00"
+    }
+  ]
+}
+```
+
+**Importante**: sin integración con ninguna cotización de mercado (ver "sin Open Banking ni APIs
+externas" en `docs/architecture.md`), `total_cost`/`avg_cost` son el **costo** de la posición
+(lo que se pagó), no su valor de mercado actual — no hay `unrealized_gain` ni "valor actual del
+portafolio". Solo `realized_gain` (de ventas ya concretadas) es calculable sin una cotización
+externa.
