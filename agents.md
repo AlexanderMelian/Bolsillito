@@ -157,6 +157,41 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
       proyectado).
 - [ ] **Fase 2 — Módulo 4: Inversiones** (portafolio, precio promedio ponderado).
 
+## 🔜 Pendientes / próximos pasos
+
+Lo que falta o quedó deliberadamente afuera del alcance de los Módulos 1–3, para no
+re-descubrirlo desde cero en la próxima sesión:
+
+**Funcionalidad**
+- **Módulo 4 — Inversiones**: sin empezar. No hay routers/schemas para `assets` ni
+  `investment_transactions` (las tablas ya existen, ver `db/schema.sql`). El precio promedio
+  ponderado y la posición deberían calcularse al vuelo a partir de los movimientos, mismo
+  criterio que `CardStatement.total_amount` (ver `docs/architecture.md` § 4) — no guardarlos
+  como campo que se pueda desincronizar.
+- **Transferencias multi-moneda**: hoy `422` si origen y destino tienen distinta moneda
+  (decisión de negocio #6). Si se pide soporte real, hay que sumar un monto en la moneda de
+  destino + la cotización aplicada.
+- **Reintegros/notas de crédito a tarjeta**: `card_id` en una `Transaction` solo es válido con
+  `type=expense` (decisión #7). `compute_statement_totals` solo suma gastos.
+
+**Infraestructura**
+- **CI (GitHub Actions)**: planeado en Fase 0, nunca implementado — no existe
+  `.github/workflows/`. Ver el plan concreto (jobs, pasos) en `docs/testing-plan.md` § CI.
+  Mientras tanto la verificación es manual antes de cada commit.
+- **Tema oscuro**: los tokens `.dark` de shadcn están definidos en `index.css` pero nada agrega
+  esa clase al `<html>` — falta `next-themes` o un toggle manual para que la app respete la
+  preferencia del sistema u ofrezca un switch. Hoy siempre renderiza en claro.
+- **Bundle del frontend**: `npm run build` avisa que el chunk principal supera 500kB
+  (Recharts pesa bastante). No es un problema todavía a esta escala, pero si crece más conviene
+  code-splitting por ruta (`React.lazy` en `app/pages/`).
+
+**Deuda técnica intencional (documentada, no urgente)**
+- Mono-usuario sin autenticación (decisión #4) — si se agrega, todas las entidades necesitan
+  `user_id` y hay que revisar cada query para que filtre por usuario.
+- `python3.14-venv` no viene instalado por defecto en el sistema (`sudo apt install
+  python3.14-venv`) — si `backend/venv` se recrea desde cero en una máquina nueva sin ese
+  paquete, `python -m venv` falla con `ensurepip` faltante.
+
 ## 📌 Decisiones de negocio (no re-preguntar, ya confirmadas)
 
 1. Transferencias entre cuentas propias → una única `Transaction` con `type='transfer'` y
