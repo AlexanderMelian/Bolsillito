@@ -21,8 +21,8 @@ async def test_create_asset_uses_default_currency(client):
     assert response.json()["currency"] == "USD"
 
 
-async def test_create_asset_rejects_duplicate_ticker_and_type(client, db_session):
-    db_session.add(Asset(ticker="AAPL", name="Apple", type=AssetType.STOCK, currency="USD"))
+async def test_create_asset_rejects_duplicate_ticker_and_type(client, db_session, user):
+    db_session.add(Asset(ticker="AAPL", name="Apple", type=AssetType.STOCK, currency="USD", user_id=user.id))
     await db_session.commit()
 
     response = await client.post(
@@ -31,11 +31,11 @@ async def test_create_asset_rejects_duplicate_ticker_and_type(client, db_session
     assert response.status_code == 409
 
 
-async def test_list_assets_sorted_by_ticker(client, db_session):
+async def test_list_assets_sorted_by_ticker(client, db_session, user):
     db_session.add_all(
         [
-            Asset(ticker="ZZZ", name="Z", type=AssetType.STOCK, currency="USD"),
-            Asset(ticker="AAA", name="A", type=AssetType.STOCK, currency="USD"),
+            Asset(ticker="ZZZ", name="Z", type=AssetType.STOCK, currency="USD", user_id=user.id),
+            Asset(ticker="AAA", name="A", type=AssetType.STOCK, currency="USD", user_id=user.id),
         ]
     )
     await db_session.commit()
@@ -50,8 +50,8 @@ async def test_get_asset_404_when_missing(client):
     assert response.status_code == 404
 
 
-async def test_update_asset(client, db_session):
-    asset = Asset(ticker="AAPL", name="Apple", type=AssetType.STOCK, currency="USD")
+async def test_update_asset(client, db_session, user):
+    asset = Asset(ticker="AAPL", name="Apple", type=AssetType.STOCK, currency="USD", user_id=user.id)
     db_session.add(asset)
     await db_session.commit()
 
@@ -60,8 +60,8 @@ async def test_update_asset(client, db_session):
     assert response.json()["name"] == "Apple Inc."
 
 
-async def test_delete_asset(client, db_session):
-    asset = Asset(ticker="AAPL", name="Apple", type=AssetType.STOCK, currency="USD")
+async def test_delete_asset(client, db_session, user):
+    asset = Asset(ticker="AAPL", name="Apple", type=AssetType.STOCK, currency="USD", user_id=user.id)
     db_session.add(asset)
     await db_session.commit()
 
@@ -72,8 +72,8 @@ async def test_delete_asset(client, db_session):
     assert follow_up.status_code == 404
 
 
-async def test_delete_asset_conflicts_when_it_has_transactions(client, db_session):
-    asset = Asset(ticker="AAPL", name="Apple", type=AssetType.STOCK, currency="USD")
+async def test_delete_asset_conflicts_when_it_has_transactions(client, db_session, user):
+    asset = Asset(ticker="AAPL", name="Apple", type=AssetType.STOCK, currency="USD", user_id=user.id)
     db_session.add(asset)
     await db_session.flush()
     db_session.add(
@@ -83,6 +83,7 @@ async def test_delete_asset_conflicts_when_it_has_transactions(client, db_sessio
             quantity=Decimal("1"),
             price=Decimal("100"),
             date=date(2026, 3, 1),
+            user_id=user.id,
         )
     )
     await db_session.commit()

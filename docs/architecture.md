@@ -1,9 +1,9 @@
 # Arquitectura Técnica — Bolsillito
 
 > **Estado:** los 4 módulos del MVP implementados (Cuentas/Tarjetas, Transacciones/Cuotas,
-> Dashboard/Reportes, Inversiones). Este documento describe la arquitectura tal como quedó
-> construida, no solo la planeada en Fase 0 — ver `agents.md` § Pendientes para lo que queda
-> afuera del MVP.
+> Dashboard/Reportes, Inversiones) más el Módulo 5 (multi-usuario). Este documento describe la
+> arquitectura tal como quedó construida, no solo la planeada en Fase 0 — ver `agents.md` §
+> Pendientes para lo que queda afuera del alcance actual.
 
 ## 1. Componentes
 
@@ -61,6 +61,18 @@ del frontend. No hay integraciones con bancos ni brokers.
   objeto claro al cual asociar la transacción de pago.
 - **Categorías como tabla, no string libre**: permite iconos, tipo (income/expense) y evita
   categorías duplicadas por typos (ej. "Comida" vs "comida"), importante en carga 100% manual.
+- **JWT stateless (`PyJWT`) en vez de sesiones server-side**: no hay tabla de sesiones que
+  limpiar ni estado compartido entre workers — cualquier instancia del backend puede validar un
+  token con solo `SECRET_KEY`. El costo (no se puede invalidar un token antes de que expire) es
+  aceptable para "algo sencillo" con pocos usuarios de confianza (ver `agents.md` § Decisiones
+  de negocio #4); si hiciera falta revocar sesiones, la alternativa más simple sería agregar una
+  columna `token_version` en `User` y validarla en `get_current_user`.
+- **`user_id` como columna en casi todas las tablas, filtrado en cada query, en vez de un
+  esquema Postgres por usuario o row-level security**: más simple de razonar y de testear con el
+  stack actual (SQLAlchemy async + Alembic), a costa de tener que acordarse de filtrar/validar
+  ownership en cada endpoint nuevo — mitigado documentando la convención en `agents.md` §
+  Reglas de estilo y con tests de aislamiento cruzado (`test_auth_api.py`, ver
+  `docs/testing-plan.md`).
 
 ## 4. Estructura del backend (`app/`)
 
@@ -73,12 +85,21 @@ app/
   schemas/           # DTOs Pydantic, un archivo por recurso (accounts.py, cards.py, ...)
   routers/           # endpoints, un archivo por recurso; validan con el schema y delegan a services/
   services/          # lógica de negocio sin FastAPI de por medio (testeable sin HTTP):
+                      #   auth.py             -- hash/verify de password, JWT, dependencia get_current_user
                       #   billing_cycle.py    -- ciclos de facturación y reparto de cuotas
                       #   balances.py         -- efecto de una transacción sobre el saldo
                       #   card_statements.py  -- alta/cálculo de resúmenes, flujo de pago
                       #   exchange_rates.py   -- conversión de moneda
                       #   investments.py      -- costo promedio ponderado, posición, ganancia realizada
 ```
+
+**Autenticación y aislamiento multi-tenant**: `services/auth.py` expone `get_current_user`, una
+dependencia de FastAPI (`HTTPBearer(auto_error=False)` + decode manual del JWT) que todo router
+protegido declara como `current_user: User = Depends(get_current_user)`. A partir de ahí, cada
+router es responsable de dos cosas: (1) filtrar toda lista/`GET` por `.where(Model.user_id ==
+current_user.id)`, y (2) validar ownership (no solo existencia) de cualquier FK que llegue en el
+body de un create/update — ver el detalle y la convención de 404-no-403 en `agents.md` § Reglas
+de estilo y `docs/api-spec.md` § Autenticación.
 
 Los `routers` nunca calculan directamente: arman la respuesta a partir de lo que devuelven los
 `services`. Esto es lo que permite testear, por ejemplo, `build_installment_amounts` con
@@ -112,21 +133,30 @@ frontend/src/
   app/
     Nav.tsx           # navegación (bottom bar en mobile, sidebar en desktop)
     pages/            # una página por ruta -- solo componen features + sus dialogs
+                       #   LoginPage.tsx / RegisterPage.tsx -- fuera del shell autenticado
   features/<recurso>/ # componentes de UI por recurso (accounts, cards, categories,
                        # transactions, dashboard), incluye sus *.test.tsx
   components/ui/      # shadcn/ui (no se edita a mano; se regenera con `shadcn add`)
   lib/
+    api/client.ts     # apiRequest: agrega el Bearer token del authStore y desloguea en un 401
+    api/auth.ts        # register/login + hooks useRegister/useLogin (guardan el token al resolver)
     api/<recurso>.ts  # fetch + hooks de TanStack Query, un archivo por recurso -- espejo
                        # de los routers del backend
     utils/            # formatCurrency, etc.
-  stores/uiStore.ts   # Zustand -- qué modal está abierto y, si aplica, qué entidad se edita
+  stores/
+    uiStore.ts        # Zustand -- qué modal está abierto y, si aplica, qué entidad se edita
+    authStore.ts       # Zustand + persist -- token y user actuales (localStorage)
   test-utils.tsx       # renderWithProviders (QueryClient nuevo por test)
 ```
 
-**Ruteo**: `react-router-dom` con `BrowserRouter` en `main.tsx` y las rutas en `App.tsx` —
-`/` (Dashboard), `/cuentas` (Cuentas + Tarjetas + Categorías), `/movimientos` (Transacciones).
-Se introdujo en el Módulo 3: hasta entonces toda la app vivía en una sola página, que dejó de
-ser manejable al sumar el dashboard.
+**Ruteo y auth gate**: `react-router-dom` con `BrowserRouter` en `main.tsx`. `App.tsx` lee
+`authStore`: sin `token`, solo monta `/login` y `/registro` (cualquier otra ruta cae en
+`LoginPage`); con `token`, monta el shell normal —`/` (Dashboard), `/cuentas` (Cuentas +
+Tarjetas + Categorías), `/movimientos` (Transacciones), `/inversiones`— y `/login`/`/registro`
+redirigen a `/`. No hay un router guard por-ruta más granular ni roles: es un gate binario a
+nivel de toda la app, consistente con "algo sencillo" (`agents.md` § Decisiones de negocio #4).
+El logout (botón "Salir" en el header) es local: limpia `authStore`, no hay endpoint de logout
+en el backend (un JWT no se puede invalidar server-side sin estado adicional, ver más arriba).
 
 **Gráficos**: Recharts, siguiendo la skill `dataviz` del proyecto. Cada serie de magnitud
 (gasto por categoría, cuotas comprometidas) usa un solo hue secuencial (`--chart-1`, azul) en
@@ -135,10 +165,11 @@ una sola serie. La paleta categórica completa (`--chart-1..5` en `index.css`) e
 el script de la skill para light y dark; reemplaza los tokens grises (chroma 0) que deja
 `shadcn init` por defecto, que no sirven para graficar nada.
 
-**Tema oscuro**: los tokens `.dark` de shadcn están definidos en `index.css`, pero todavía no
-hay ningún mecanismo que agregue esa clase al `<html>` (ni `next-themes` ni un toggle manual) --
-la app siempre renderiza en modo claro sin importar la preferencia del sistema. Es un pendiente,
-no una decisión (ver `agents.md` § Pendientes).
+**Tema oscuro/claro**: `stores/themeStore.ts` (Zustand + `persist`) guarda la preferencia
+(`light`/`dark`/`system`) en `localStorage` y aplica/quita la clase `.dark` en `<html>`; en modo
+`system` sigue en vivo el cambio de preferencia del SO vía
+`matchMedia('(prefers-color-scheme: dark)')`. El toggle vive en `app/ThemeToggle.tsx`, en el
+header junto al resto de los controles de sesión.
 
 ## 6. Entornos
 

@@ -76,12 +76,14 @@ async def compute_position(session: AsyncSession, asset: Asset) -> AssetPosition
 
 
 async def get_current_quantity(
-    session: AsyncSession, asset_id: int, *, exclude_transaction_id: int | None = None
+    session: AsyncSession, user_id: int, asset_id: int, *, exclude_transaction_id: int | None = None
 ) -> Decimal:
     """Cantidad neta actual (compras - ventas), sin pasar por el costo promedio -- para validar
-    que una venta (o el borrado de una compra) no deje la posición en negativo."""
+    que una venta (o el borrado de una compra) no deje la posición en negativo. Filtra también
+    por `user_id` -- redundante con que `asset_id` ya pertenece a un solo usuario (se valida al
+    crear), pero es más seguro no depender de esa garantía indirecta."""
     stmt = select(InvestmentTransaction.type, InvestmentTransaction.quantity).where(
-        InvestmentTransaction.asset_id == asset_id
+        InvestmentTransaction.asset_id == asset_id, InvestmentTransaction.user_id == user_id
     )
     if exclude_transaction_id is not None:
         stmt = stmt.where(InvestmentTransaction.id != exclude_transaction_id)
@@ -93,10 +95,17 @@ async def get_current_quantity(
     return quantity
 
 
-async def list_assets_with_activity(session: AsyncSession) -> list[Asset]:
+async def list_assets_with_activity(session: AsyncSession, user_id: int) -> list[Asset]:
     stmt = (
         select(Asset)
-        .where(Asset.id.in_(select(InvestmentTransaction.asset_id).distinct()))
+        .where(
+            Asset.user_id == user_id,
+            Asset.id.in_(
+                select(InvestmentTransaction.asset_id).where(
+                    InvestmentTransaction.user_id == user_id
+                )
+            ),
+        )
         .order_by(Asset.ticker)
     )
     return list((await session.execute(stmt)).scalars().all())

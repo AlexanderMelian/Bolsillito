@@ -1,21 +1,28 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.models import (
     Account, Card, CardType, Category, InstallmentItem, InstallmentPlan, Transaction,
-    TransactionType,
+    TransactionType, User,
 )
 from app.schemas.installment_plans import InstallmentPlanCreate, InstallmentPlanRead
+from app.services.auth import get_current_user
 from app.services.billing_cycle import build_installment_amounts, build_installment_closing_dates
 from app.services.card_statements import get_or_create_statement
 
 router = APIRouter(prefix="/installment-plans", tags=["installment-plans"])
 
 
-async def _get_plan_or_404(plan_id: int, session: AsyncSession) -> InstallmentPlan:
-    plan = await session.get(InstallmentPlan, plan_id)
+async def _get_plan_or_404(plan_id: int, user: User, session: AsyncSession) -> InstallmentPlan:
+    plan = (
+        await session.execute(
+            select(InstallmentPlan).where(
+                InstallmentPlan.id == plan_id, InstallmentPlan.user_id == user.id
+            )
+        )
+    ).scalar_one_or_none()
     if plan is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Plan de cuotas no encontrado"
@@ -25,9 +32,15 @@ async def _get_plan_or_404(plan_id: int, session: AsyncSession) -> InstallmentPl
 
 @router.post("", response_model=InstallmentPlanRead, status_code=status.HTTP_201_CREATED)
 async def create_installment_plan(
-    payload: InstallmentPlanCreate, session: AsyncSession = Depends(get_session)
+    payload: InstallmentPlanCreate,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> InstallmentPlan:
-    card = await session.get(Card, payload.card_id)
+    card = (
+        await session.execute(
+            select(Card).where(Card.id == payload.card_id, Card.user_id == current_user.id)
+        )
+    ).scalar_one_or_none()
     if card is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tarjeta no encontrada")
     if card.type != CardType.CREDIT:
@@ -37,7 +50,13 @@ async def create_installment_plan(
         )
 
     if payload.category_id is not None:
-        category = await session.get(Category, payload.category_id)
+        category = (
+            await session.execute(
+                select(Category).where(
+                    Category.id == payload.category_id, Category.user_id == current_user.id
+                )
+            )
+        ).scalar_one_or_none()
         if category is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Categoría no encontrada"
@@ -51,7 +70,7 @@ async def create_installment_plan(
     account = await session.get(Account, card.account_id)
     assert account is not None  # invariante de FK: Card.account_id siempre apunta a una cuenta
 
-    plan = InstallmentPlan(**payload.model_dump())
+    plan = InstallmentPlan(**payload.model_dump(), user_id=current_user.id)
     session.add(plan)
     await session.flush()
 
@@ -70,6 +89,7 @@ async def create_installment_plan(
     # el resumen (services.card_statements.pay_statement).
     session.add(
         Transaction(
+            user_id=current_user.id,
             type=TransactionType.EXPENSE,
             account_id=card.account_id,
             card_id=card.id,
@@ -89,22 +109,26 @@ async def create_installment_plan(
 
 @router.get("/{plan_id}", response_model=InstallmentPlanRead)
 async def get_installment_plan(
-    plan_id: int, session: AsyncSession = Depends(get_session)
+    plan_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> InstallmentPlan:
-    plan = await _get_plan_or_404(plan_id, session)
+    plan = await _get_plan_or_404(plan_id, current_user, session)
     await session.refresh(plan, attribute_names=["items"])
     return plan
 
 
 @router.delete("/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_installment_plan(
-    plan_id: int, session: AsyncSession = Depends(get_session)
+    plan_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> None:
     """Borra el plan (las cuotas se van en cascada, ver InstallmentPlan.items en models.py) y
     la transacción de registro asociada -- hay que borrar esta última primero: su FK a
     installment_plans no tiene ON DELETE CASCADE (a propósito, para que un borrado de
     transacción normal no se lleve puesto un plan de cuotas)."""
-    plan = await _get_plan_or_404(plan_id, session)
+    plan = await _get_plan_or_404(plan_id, current_user, session)
     await session.execute(delete(Transaction).where(Transaction.installment_plan_id == plan_id))
     await session.delete(plan)
     await session.commit()

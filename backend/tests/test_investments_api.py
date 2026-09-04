@@ -6,16 +6,16 @@ from app.models import Account, AccountType, Asset, AssetType, InvestmentTransac
 TODAY = date(2026, 3, 1)
 
 
-async def _account(db_session, **overrides) -> Account:
-    defaults = {"name": "Cuenta", "type": AccountType.BANK, "currency": "USD"}
+async def _account(db_session, user_id: int, **overrides) -> Account:
+    defaults = {"name": "Cuenta", "type": AccountType.BANK, "currency": "USD", "user_id": user_id}
     account = Account(**{**defaults, **overrides})
     db_session.add(account)
     await db_session.commit()
     return account
 
 
-async def _asset(db_session, **overrides) -> Asset:
-    defaults = {"ticker": "AAPL", "name": "Apple", "type": AssetType.STOCK, "currency": "USD"}
+async def _asset(db_session, user_id: int, **overrides) -> Asset:
+    defaults = {"ticker": "AAPL", "name": "Apple", "type": AssetType.STOCK, "currency": "USD", "user_id": user_id}
     asset = Asset(**{**defaults, **overrides})
     db_session.add(asset)
     await db_session.commit()
@@ -25,8 +25,8 @@ async def _asset(db_session, **overrides) -> Asset:
 # --- Alta sin cuenta (no toca el saldo) ------------------------------------------------------
 
 
-async def test_create_buy_without_account_does_not_touch_any_balance(client, db_session):
-    asset = await _asset(db_session)
+async def test_create_buy_without_account_does_not_touch_any_balance(client, db_session, user):
+    asset = await _asset(db_session, user.id)
 
     response = await client.post(
         "/api/v1/investment-transactions",
@@ -45,9 +45,9 @@ async def test_create_buy_without_account_does_not_touch_any_balance(client, db_
 # --- Efecto sobre el saldo cuando hay cuenta asociada --------------------------------------
 
 
-async def test_buy_with_account_debits_the_purchase_cost_plus_fee(client, db_session):
-    account = await _account(db_session, balance=Decimal("10000.00"))
-    asset = await _asset(db_session)
+async def test_buy_with_account_debits_the_purchase_cost_plus_fee(client, db_session, user):
+    account = await _account(db_session, user.id, balance=Decimal("10000.00"))
+    asset = await _asset(db_session, user.id)
 
     response = await client.post(
         "/api/v1/investment-transactions",
@@ -67,12 +67,12 @@ async def test_buy_with_account_debits_the_purchase_cost_plus_fee(client, db_ses
     assert account.balance == Decimal("8495.00")  # 10000 - (10*150 + 5)
 
 
-async def test_sell_with_account_credits_the_proceeds_minus_fee(client, db_session):
-    account = await _account(db_session, balance=Decimal("0.00"))
-    asset = await _asset(db_session)
+async def test_sell_with_account_credits_the_proceeds_minus_fee(client, db_session, user):
+    account = await _account(db_session, user.id, balance=Decimal("0.00"))
+    asset = await _asset(db_session, user.id)
     db_session.add(
         InvestmentTransaction(
-            asset_id=asset.id, type=InvestmentTxType.BUY, quantity=Decimal("10"), price=Decimal("100"),
+            user_id=user.id, asset_id=asset.id, type=InvestmentTxType.BUY, quantity=Decimal("10"), price=Decimal("100"),
             date=TODAY,
         )
     )
@@ -96,9 +96,9 @@ async def test_sell_with_account_credits_the_proceeds_minus_fee(client, db_sessi
     assert account.balance == Decimal("748.00")  # 5*150 - 2
 
 
-async def test_dividend_with_account_credits_the_total_amount(client, db_session):
-    account = await _account(db_session, balance=Decimal("0.00"))
-    asset = await _asset(db_session)
+async def test_dividend_with_account_credits_the_total_amount(client, db_session, user):
+    account = await _account(db_session, user.id, balance=Decimal("0.00"))
+    asset = await _asset(db_session, user.id)
 
     response = await client.post(
         "/api/v1/investment-transactions",
@@ -128,8 +128,8 @@ async def test_create_rejects_unknown_asset(client):
     assert response.status_code == 404
 
 
-async def test_create_rejects_unknown_account(client, db_session):
-    asset = await _asset(db_session)
+async def test_create_rejects_unknown_account(client, db_session, user):
+    asset = await _asset(db_session, user.id)
     response = await client.post(
         "/api/v1/investment-transactions",
         json={
@@ -140,9 +140,9 @@ async def test_create_rejects_unknown_account(client, db_session):
     assert response.status_code == 404
 
 
-async def test_create_rejects_account_currency_mismatch(client, db_session):
-    account = await _account(db_session, currency="ARS")
-    asset = await _asset(db_session, currency="USD")
+async def test_create_rejects_account_currency_mismatch(client, db_session, user):
+    account = await _account(db_session, user.id, currency="ARS")
+    asset = await _asset(db_session, user.id, currency="USD")
 
     response = await client.post(
         "/api/v1/investment-transactions",
@@ -154,11 +154,11 @@ async def test_create_rejects_account_currency_mismatch(client, db_session):
     assert response.status_code == 422
 
 
-async def test_create_rejects_selling_more_than_current_position(client, db_session):
-    asset = await _asset(db_session)
+async def test_create_rejects_selling_more_than_current_position(client, db_session, user):
+    asset = await _asset(db_session, user.id)
     db_session.add(
         InvestmentTransaction(
-            asset_id=asset.id, type=InvestmentTxType.BUY, quantity=Decimal("5"), price=Decimal("100"),
+            user_id=user.id, asset_id=asset.id, type=InvestmentTxType.BUY, quantity=Decimal("5"), price=Decimal("100"),
             date=TODAY,
         )
     )
@@ -174,8 +174,8 @@ async def test_create_rejects_selling_more_than_current_position(client, db_sess
     assert response.status_code == 422
 
 
-async def test_create_rejects_zero_or_negative_quantity_and_price(client, db_session):
-    asset = await _asset(db_session)
+async def test_create_rejects_zero_or_negative_quantity_and_price(client, db_session, user):
+    asset = await _asset(db_session, user.id)
 
     for field, value in [("quantity", "0"), ("price", "0")]:
         payload = {
@@ -187,12 +187,12 @@ async def test_create_rejects_zero_or_negative_quantity_and_price(client, db_ses
         assert response.status_code == 422
 
 
-async def test_create_rejects_sell_fee_larger_than_proceeds(client, db_session):
-    account = await _account(db_session)
-    asset = await _asset(db_session)
+async def test_create_rejects_sell_fee_larger_than_proceeds(client, db_session, user):
+    account = await _account(db_session, user.id)
+    asset = await _asset(db_session, user.id)
     db_session.add(
         InvestmentTransaction(
-            asset_id=asset.id, type=InvestmentTxType.BUY, quantity=Decimal("10"), price=Decimal("100"),
+            user_id=user.id, asset_id=asset.id, type=InvestmentTxType.BUY, quantity=Decimal("10"), price=Decimal("100"),
             date=TODAY,
         )
     )
@@ -211,8 +211,8 @@ async def test_create_rejects_sell_fee_larger_than_proceeds(client, db_session):
 # --- Precio promedio ponderado y ganancia realizada -------------------------------------------
 
 
-async def test_weighted_average_cost_across_two_lots(client, db_session):
-    asset = await _asset(db_session)
+async def test_weighted_average_cost_across_two_lots(client, db_session, user):
+    asset = await _asset(db_session, user.id)
 
     await client.post(
         "/api/v1/investment-transactions",
@@ -230,8 +230,8 @@ async def test_weighted_average_cost_across_two_lots(client, db_session):
     assert position["total_cost"] == "3000.00"
 
 
-async def test_sell_does_not_change_average_cost_of_remaining_position(client, db_session):
-    asset = await _asset(db_session)
+async def test_sell_does_not_change_average_cost_of_remaining_position(client, db_session, user):
+    asset = await _asset(db_session, user.id)
     await client.post(
         "/api/v1/investment-transactions",
         json={"asset_id": asset.id, "type": "buy", "quantity": "10", "price": "100.00", "date": "2026-01-01"},
@@ -249,8 +249,8 @@ async def test_sell_does_not_change_average_cost_of_remaining_position(client, d
     assert position["realized_gain"] == "200.00"  # 4 * (150 - 100)
 
 
-async def test_dividend_does_not_affect_quantity_or_average_cost(client, db_session):
-    asset = await _asset(db_session)
+async def test_dividend_does_not_affect_quantity_or_average_cost(client, db_session, user):
+    asset = await _asset(db_session, user.id)
     await client.post(
         "/api/v1/investment-transactions",
         json={"asset_id": asset.id, "type": "buy", "quantity": "10", "price": "100.00", "date": "2026-01-01"},
@@ -269,9 +269,9 @@ async def test_dividend_does_not_affect_quantity_or_average_cost(client, db_sess
 # --- Listado / get / delete --------------------------------------------------------------------
 
 
-async def test_list_investment_transactions_filters_by_asset(client, db_session):
-    asset_a = await _asset(db_session, ticker="AAA")
-    asset_b = await _asset(db_session, ticker="BBB")
+async def test_list_investment_transactions_filters_by_asset(client, db_session, user):
+    asset_a = await _asset(db_session, user.id, ticker="AAA")
+    asset_b = await _asset(db_session, user.id, ticker="BBB")
     await client.post(
         "/api/v1/investment-transactions",
         json={"asset_id": asset_a.id, "type": "buy", "quantity": "1", "price": "1", "date": TODAY.isoformat()},
@@ -285,10 +285,10 @@ async def test_list_investment_transactions_filters_by_asset(client, db_session)
     assert len(response.json()) == 1
 
 
-async def test_list_investment_transactions_filters_by_account(client, db_session):
-    account_a = await _account(db_session, name="A")
-    account_b = await _account(db_session, name="B")
-    asset = await _asset(db_session)
+async def test_list_investment_transactions_filters_by_account(client, db_session, user):
+    account_a = await _account(db_session, user.id, name="A")
+    account_b = await _account(db_session, user.id, name="B")
+    asset = await _asset(db_session, user.id)
     await client.post(
         "/api/v1/investment-transactions",
         json={
@@ -310,8 +310,8 @@ async def test_list_investment_transactions_filters_by_account(client, db_sessio
     assert len(response.json()) == 1
 
 
-async def test_create_rejects_negative_fee(client, db_session):
-    asset = await _asset(db_session)
+async def test_create_rejects_negative_fee(client, db_session, user):
+    asset = await _asset(db_session, user.id)
     response = await client.post(
         "/api/v1/investment-transactions",
         json={
@@ -327,9 +327,9 @@ async def test_get_investment_transaction_404_when_missing(client):
     assert response.status_code == 404
 
 
-async def test_delete_investment_transaction_reverses_balance_effect(client, db_session):
-    account = await _account(db_session, balance=Decimal("1000.00"))
-    asset = await _asset(db_session)
+async def test_delete_investment_transaction_reverses_balance_effect(client, db_session, user):
+    account = await _account(db_session, user.id, balance=Decimal("1000.00"))
+    asset = await _asset(db_session, user.id)
     create_response = await client.post(
         "/api/v1/investment-transactions",
         json={
@@ -348,8 +348,8 @@ async def test_delete_investment_transaction_reverses_balance_effect(client, db_
     assert account.balance == Decimal("1000.00")
 
 
-async def test_delete_buy_blocked_when_it_would_leave_position_negative(client, db_session):
-    asset = await _asset(db_session)
+async def test_delete_buy_blocked_when_it_would_leave_position_negative(client, db_session, user):
+    asset = await _asset(db_session, user.id)
     buy_response = await client.post(
         "/api/v1/investment-transactions",
         json={"asset_id": asset.id, "type": "buy", "quantity": "10", "price": "100", "date": "2026-01-01"},
@@ -363,8 +363,8 @@ async def test_delete_buy_blocked_when_it_would_leave_position_negative(client, 
     assert response.status_code == 409
 
 
-async def test_delete_sell_is_always_allowed(client, db_session):
-    asset = await _asset(db_session)
+async def test_delete_sell_is_always_allowed(client, db_session, user):
+    asset = await _asset(db_session, user.id)
     await client.post(
         "/api/v1/investment-transactions",
         json={"asset_id": asset.id, "type": "buy", "quantity": "10", "price": "100", "date": "2026-01-01"},
@@ -381,15 +381,15 @@ async def test_delete_sell_is_always_allowed(client, db_session):
 # --- /portfolio ----------------------------------------------------------------------------
 
 
-async def test_portfolio_only_lists_assets_with_activity(client, db_session):
-    await _asset(db_session, ticker="NOACT")  # sin transacciones
+async def test_portfolio_only_lists_assets_with_activity(client, db_session, user):
+    await _asset(db_session, user.id, ticker="NOACT")  # sin transacciones
 
     response = await client.get("/api/v1/portfolio")
     assert response.json()["positions"] == []
 
 
-async def test_portfolio_converts_to_reference_currency(client, db_session):
-    asset = await _asset(db_session, currency="USD")
+async def test_portfolio_converts_to_reference_currency(client, db_session, user):
+    asset = await _asset(db_session, user.id, currency="USD")
     await client.post(
         "/api/v1/investment-transactions",
         json={"asset_id": asset.id, "type": "buy", "quantity": "10", "price": "100.00", "date": TODAY.isoformat()},
@@ -406,8 +406,8 @@ async def test_portfolio_converts_to_reference_currency(client, db_session):
     assert body["unconverted"] == []
 
 
-async def test_portfolio_reports_unconverted_cost_without_a_rate(client, db_session):
-    asset = await _asset(db_session, currency="USD")
+async def test_portfolio_reports_unconverted_cost_without_a_rate(client, db_session, user):
+    asset = await _asset(db_session, user.id, currency="USD")
     await client.post(
         "/api/v1/investment-transactions",
         json={"asset_id": asset.id, "type": "buy", "quantity": "10", "price": "100.00", "date": TODAY.isoformat()},

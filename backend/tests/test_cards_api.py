@@ -4,16 +4,16 @@ from decimal import Decimal
 from app.models import Account, AccountType, Card, CardType, InstallmentPlan
 
 
-async def _account(db_session, **overrides) -> Account:
-    defaults = {"name": "Cuenta", "type": AccountType.BANK}
+async def _account(db_session, user_id: int, **overrides) -> Account:
+    defaults = {"name": "Cuenta", "type": AccountType.BANK, "user_id": user_id}
     account = Account(**{**defaults, **overrides})
     db_session.add(account)
     await db_session.commit()
     return account
 
 
-async def test_create_debit_card_without_cycle_fields(client, db_session):
-    account = await _account(db_session)
+async def test_create_debit_card_without_cycle_fields(client, db_session, user):
+    account = await _account(db_session, user.id)
 
     response = await client.post(
         "/api/v1/cards",
@@ -27,8 +27,8 @@ async def test_create_debit_card_without_cycle_fields(client, db_session):
     assert body["payment_day"] is None
 
 
-async def test_create_credit_card_requires_closing_and_payment_day(client, db_session):
-    account = await _account(db_session)
+async def test_create_credit_card_requires_closing_and_payment_day(client, db_session, user):
+    account = await _account(db_session, user.id)
 
     response = await client.post(
         "/api/v1/cards", json={"account_id": account.id, "name": "Visa", "type": "credit"}
@@ -37,8 +37,8 @@ async def test_create_credit_card_requires_closing_and_payment_day(client, db_se
     assert response.status_code == 422
 
 
-async def test_create_credit_card_with_cycle_fields_succeeds(client, db_session):
-    account = await _account(db_session)
+async def test_create_credit_card_with_cycle_fields_succeeds(client, db_session, user):
+    account = await _account(db_session, user.id)
 
     response = await client.post(
         "/api/v1/cards",
@@ -59,13 +59,13 @@ async def test_create_credit_card_with_cycle_fields_succeeds(client, db_session)
     assert body["credit_limit"] == "500000.00"
 
 
-async def test_list_cards_filtered_by_account(client, db_session):
-    account_a = await _account(db_session, name="A")
-    account_b = await _account(db_session, name="B")
+async def test_list_cards_filtered_by_account(client, db_session, user):
+    account_a = await _account(db_session, user.id, name="A")
+    account_b = await _account(db_session, user.id, name="B")
     db_session.add_all(
         [
-            Card(account_id=account_a.id, name="Tarjeta A", type=CardType.DEBIT),
-            Card(account_id=account_b.id, name="Tarjeta B", type=CardType.DEBIT),
+            Card(account_id=account_a.id, name="Tarjeta A", type=CardType.DEBIT, user_id=user.id),
+            Card(account_id=account_b.id, name="Tarjeta B", type=CardType.DEBIT, user_id=user.id),
         ]
     )
     await db_session.commit()
@@ -81,9 +81,9 @@ async def test_get_card_404_when_missing(client):
     assert response.status_code == 404
 
 
-async def test_update_card_partial_patch(client, db_session):
-    account = await _account(db_session)
-    card = Card(account_id=account.id, name="Débito", type=CardType.DEBIT)
+async def test_update_card_partial_patch(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = Card(account_id=account.id, name="Débito", type=CardType.DEBIT, user_id=user.id)
     db_session.add(card)
     await db_session.commit()
 
@@ -93,9 +93,9 @@ async def test_update_card_partial_patch(client, db_session):
     assert response.json()["name"] == "Débito Plus"
 
 
-async def test_update_card_to_credit_without_cycle_fields_is_rejected(client, db_session):
-    account = await _account(db_session)
-    card = Card(account_id=account.id, name="Débito", type=CardType.DEBIT)
+async def test_update_card_to_credit_without_cycle_fields_is_rejected(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = Card(account_id=account.id, name="Débito", type=CardType.DEBIT, user_id=user.id)
     db_session.add(card)
     await db_session.commit()
 
@@ -104,9 +104,9 @@ async def test_update_card_to_credit_without_cycle_fields_is_rejected(client, db
     assert response.status_code == 422
 
 
-async def test_delete_card_hard_deletes_when_no_dependents(client, db_session):
-    account = await _account(db_session)
-    card = Card(account_id=account.id, name="Débito", type=CardType.DEBIT)
+async def test_delete_card_hard_deletes_when_no_dependents(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = Card(account_id=account.id, name="Débito", type=CardType.DEBIT, user_id=user.id)
     db_session.add(card)
     await db_session.commit()
     card_id = card.id
@@ -118,10 +118,11 @@ async def test_delete_card_hard_deletes_when_no_dependents(client, db_session):
     assert follow_up.status_code == 404
 
 
-async def test_delete_card_conflicts_when_it_has_an_installment_plan(client, db_session):
-    account = await _account(db_session)
+async def test_delete_card_conflicts_when_it_has_an_installment_plan(client, db_session, user):
+    account = await _account(db_session, user.id)
     card = Card(
-        account_id=account.id, name="Visa", type=CardType.CREDIT, closing_day=15, payment_day=25
+        account_id=account.id, name="Visa", type=CardType.CREDIT, closing_day=15, payment_day=25,
+        user_id=user.id,
     )
     db_session.add(card)
     await db_session.flush()
@@ -132,6 +133,7 @@ async def test_delete_card_conflicts_when_it_has_an_installment_plan(client, db_
             purchase_date=date(2026, 3, 1),
             total_amount=Decimal("100.00"),
             total_installments=1,
+            user_id=user.id,
         )
     )
     await db_session.commit()

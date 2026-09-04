@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.database import get_session
 from app.main import app
-from app.models import Base
+from app.models import Base, User
+from app.services.auth import create_access_token, hash_password
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -52,9 +53,32 @@ async def db_session(engine):
 
 
 @pytest_asyncio.fixture
-async def client(db_session):
+async def user(db_session):
+    """Usuario de prueba usado como dueño por defecto de todo lo creado en el test. Vive dentro
+    del mismo SAVEPOINT que `db_session`, así que se descarta junto con el resto al terminar."""
+    new_user = User(username="testuser", hashed_password=hash_password("testpassword123"))
+    db_session.add(new_user)
+    await db_session.commit()
+    await db_session.refresh(new_user)
+    return new_user
+
+
+@pytest_asyncio.fixture
+async def other_user(db_session):
+    """Un segundo usuario, para los tests de aislamiento entre usuarios (A no puede ver/tocar
+    los datos de B)."""
+    new_user = User(username="otheruser", hashed_password=hash_password("otherpassword123"))
+    db_session.add(new_user)
+    await db_session.commit()
+    await db_session.refresh(new_user)
+    return new_user
+
+
+@pytest_asyncio.fixture
+async def unauthenticated_client(db_session):
     """Cliente HTTP contra la app FastAPI real, pero con `get_session` overrideado para usar
-    la misma `db_session` (y por lo tanto el mismo SAVEPOINT aislado) del test."""
+    la misma `db_session` (y por lo tanto el mismo SAVEPOINT aislado) del test. Sin header de
+    autenticación -- para probar 401s y los endpoints de /auth."""
 
     async def override_get_session():
         yield db_session
@@ -64,3 +88,13 @@ async def client(db_session):
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def client(unauthenticated_client, user):
+    """Igual que `unauthenticated_client`, pero autenticado por defecto como `user` -- la
+    mayoría de los tests de la suite existente no les importa la identidad del usuario, solo
+    que las requests estén autenticadas."""
+    token = create_access_token(user.id)
+    unauthenticated_client.headers["Authorization"] = f"Bearer {token}"
+    return unauthenticated_client

@@ -4,28 +4,40 @@ backend/tests/); se corre a mano con `python scripts/smoke_test.py`.
 """
 
 import asyncio
+import uuid
 from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from app.services.auth import hash_password
 from app.services.billing_cycle import build_installment_amounts, build_installment_closing_dates
 from app.database import async_session_factory
 from app.models import (
     Account, AccountType, Card, CardStatement, CardType, InstallmentItem,
-    InstallmentPlan, Transaction, TransactionType,
+    InstallmentPlan, Transaction, TransactionType, User,
 )
 
 
 async def main() -> None:
     async with async_session_factory() as session:
-        account = Account(name="Cuenta Sueldo", type=AccountType.BANK, currency="ARS")
+        user = User(
+            username=f"smoke_test_{uuid.uuid4().hex[:8]}",
+            hashed_password=hash_password("smoketestpassword"),
+        )
+        session.add(user)
+        await session.flush()
+
+        account = Account(
+            name="Cuenta Sueldo", type=AccountType.BANK, currency="ARS", user_id=user.id
+        )
         session.add(account)
         await session.flush()
 
         card = Card(
             account_id=account.id,
+            user_id=user.id,
             name="Visa Gold",
             type=CardType.CREDIT,
             credit_limit=Decimal("500000.00"),
@@ -41,6 +53,7 @@ async def main() -> None:
 
         plan = InstallmentPlan(
             card_id=card.id,
+            user_id=user.id,
             description="Notebook",
             purchase_date=purchase_date,
             total_amount=total_amount,
@@ -66,6 +79,7 @@ async def main() -> None:
             if statement is None:
                 statement = CardStatement(
                     card_id=card.id,
+                    user_id=user.id,
                     closing_date=closing,
                     payment_due_date=closing.replace(day=25),
                 )
@@ -106,6 +120,7 @@ async def main() -> None:
                     destination_account_id=account.id,  # inválido: origen == destino
                     amount=Decimal("100.00"),
                     date=date(2026, 3, 14),
+                    user_id=user.id,
                 )
             )
             await session.commit()

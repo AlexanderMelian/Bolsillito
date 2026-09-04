@@ -9,17 +9,18 @@ from app.models import (
 TODAY = date.today()
 
 
-async def _account(db_session, **overrides) -> Account:
-    defaults = {"name": "Cuenta", "type": AccountType.BANK, "currency": "ARS"}
+async def _account(db_session, user_id: int, **overrides) -> Account:
+    defaults = {"name": "Cuenta", "type": AccountType.BANK, "currency": "ARS", "user_id": user_id}
     account = Account(**{**defaults, **overrides})
     db_session.add(account)
     await db_session.commit()
     return account
 
 
-async def _credit_card(db_session, account: Account, **overrides) -> Card:
+async def _credit_card(db_session, account: Account, user_id: int, **overrides) -> Card:
     defaults = {
         "account_id": account.id,
+        "user_id": user_id,
         "name": "Visa",
         "type": CardType.CREDIT,
         "closing_day": 15,
@@ -31,10 +32,11 @@ async def _credit_card(db_session, account: Account, **overrides) -> Card:
     return card
 
 
-async def test_open_statement_before_its_closing_date(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+async def test_open_statement_before_its_closing_date(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
     statement = CardStatement(
+        user_id=user.id,
         card_id=card.id,
         closing_date=TODAY + timedelta(days=30),
         payment_due_date=TODAY + timedelta(days=40),
@@ -47,10 +49,11 @@ async def test_open_statement_before_its_closing_date(client, db_session):
     assert body["status"] == "open"
 
 
-async def test_closed_statement_after_its_closing_date(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+async def test_closed_statement_after_its_closing_date(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
     statement = CardStatement(
+        user_id=user.id,
         card_id=card.id,
         closing_date=TODAY - timedelta(days=30),
         payment_due_date=TODAY - timedelta(days=20),
@@ -64,17 +67,19 @@ async def test_closed_statement_after_its_closing_date(client, db_session):
 
 
 async def test_statement_total_sums_installments_and_onetime_expenses_in_its_period(
-    client, db_session
+    client, db_session, user
 ):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
 
     previous_statement = CardStatement(
+        user_id=user.id,
         card_id=card.id,
         closing_date=TODAY - timedelta(days=30),
         payment_due_date=TODAY - timedelta(days=20),
     )
     statement = CardStatement(
+        user_id=user.id,
         card_id=card.id,
         closing_date=TODAY + timedelta(days=30),
         payment_due_date=TODAY + timedelta(days=40),
@@ -83,6 +88,7 @@ async def test_statement_total_sums_installments_and_onetime_expenses_in_its_per
     await db_session.flush()
 
     plan = InstallmentPlan(
+        user_id=user.id,
         card_id=card.id,
         description="Compra en cuotas",
         purchase_date=TODAY,
@@ -98,6 +104,7 @@ async def test_statement_total_sums_installments_and_onetime_expenses_in_its_per
     # gasto de pago único DENTRO del período de `statement` -> debe sumar
     db_session.add(
         Transaction(
+            user_id=user.id,
             type=TransactionType.EXPENSE,
             account_id=account.id,
             card_id=card.id,
@@ -108,6 +115,7 @@ async def test_statement_total_sums_installments_and_onetime_expenses_in_its_per
     # gasto de pago único ANTES del período (pertenece al ciclo anterior) -> NO debe sumar
     db_session.add(
         Transaction(
+            user_id=user.id,
             type=TransactionType.EXPENSE,
             account_id=account.id,
             card_id=card.id,
@@ -123,13 +131,13 @@ async def test_statement_total_sums_installments_and_onetime_expenses_in_its_per
 
 
 async def test_onetime_card_expense_created_via_transactions_endpoint_creates_a_statement(
-    client, db_session
+    client, db_session, user
 ):
     """Regresión: un gasto de pago único con tarjeta de crédito debe generar (u ocupar) el
     CardStatement de su ciclo, aunque nunca haya habido una compra en cuotas en esa tarjeta --
     si no, ese gasto sería invisible en /cards/{id}/statements y nunca se podría pagar."""
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account, closing_day=15, payment_day=25)
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id, closing_day=15, payment_day=25)
 
     response = await client.post(
         "/api/v1/transactions",
@@ -150,15 +158,17 @@ async def test_onetime_card_expense_created_via_transactions_endpoint_creates_a_
     assert statement["total_amount"] == "80.00"
 
 
-async def test_pay_statement_debits_the_payment_account_and_marks_it_paid(client, db_session):
-    account = await _account(db_session, balance=Decimal("1000.00"))
-    card = await _credit_card(db_session, account)
+async def test_pay_statement_debits_the_payment_account_and_marks_it_paid(client, db_session, user):
+    account = await _account(db_session, user.id, balance=Decimal("1000.00"))
+    card = await _credit_card(db_session, account, user.id)
     statement = CardStatement(
+        user_id=user.id,
         card_id=card.id, closing_date=TODAY, payment_due_date=TODAY + timedelta(days=10)
     )
     db_session.add(statement)
     await db_session.flush()
     plan = InstallmentPlan(
+        user_id=user.id,
         card_id=card.id,
         description="Compra",
         purchase_date=TODAY,
@@ -187,17 +197,19 @@ async def test_pay_statement_debits_the_payment_account_and_marks_it_paid(client
     assert account.balance == Decimal("800.00")
 
 
-async def test_pay_statement_uses_payment_account_when_set(client, db_session):
-    card_account = await _account(db_session, name="Cuenta tarjeta", balance=Decimal("0.00"))
-    payment_account = await _account(db_session, name="Cuenta pago", balance=Decimal("500.00"))
-    card = await _credit_card(db_session, card_account, payment_account_id=payment_account.id)
+async def test_pay_statement_uses_payment_account_when_set(client, db_session, user):
+    card_account = await _account(db_session, user.id, name="Cuenta tarjeta", balance=Decimal("0.00"))
+    payment_account = await _account(db_session, user.id, name="Cuenta pago", balance=Decimal("500.00"))
+    card = await _credit_card(db_session, card_account, user.id, payment_account_id=payment_account.id)
     statement = CardStatement(
+        user_id=user.id,
         card_id=card.id, closing_date=TODAY, payment_due_date=TODAY + timedelta(days=10)
     )
     db_session.add(statement)
     await db_session.flush()
     db_session.add(
         Transaction(
+            user_id=user.id,
             type=TransactionType.EXPENSE,
             account_id=card_account.id,
             card_id=card.id,
@@ -218,16 +230,18 @@ async def test_pay_statement_uses_payment_account_when_set(client, db_session):
     assert card_account.balance == Decimal("0.00")
 
 
-async def test_pay_statement_twice_is_rejected(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+async def test_pay_statement_twice_is_rejected(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
     statement = CardStatement(
+        user_id=user.id,
         card_id=card.id, closing_date=TODAY, payment_due_date=TODAY + timedelta(days=10)
     )
     db_session.add(statement)
     await db_session.flush()
     db_session.add(
         Transaction(
+            user_id=user.id,
             type=TransactionType.EXPENSE,
             account_id=account.id,
             card_id=card.id,
@@ -250,10 +264,11 @@ async def test_pay_statement_twice_is_rejected(client, db_session):
     assert second.status_code == 409
 
 
-async def test_pay_statement_with_no_pending_amount_is_rejected(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+async def test_pay_statement_with_no_pending_amount_is_rejected(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
     statement = CardStatement(
+        user_id=user.id,
         card_id=card.id, closing_date=TODAY, payment_due_date=TODAY + timedelta(days=10)
     )
     db_session.add(statement)
@@ -266,9 +281,9 @@ async def test_pay_statement_with_no_pending_amount_is_rejected(client, db_sessi
     assert response.status_code == 409
 
 
-async def test_pay_statement_404_for_unknown_statement(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+async def test_pay_statement_404_for_unknown_statement(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
 
     response = await client.post(
         f"/api/v1/cards/{card.id}/statements/999999/pay",

@@ -9,11 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_session
 from app.models import (
-    Account, Card, CardStatement, Category, StatementStatus, Transaction, TransactionType,
+    Account, Card, CardStatement, Category, StatementStatus, Transaction, TransactionType, User,
 )
 from app.schemas.dashboard import (
     CashFlowMonth, CashFlowProjection, CategorySpending, DashboardSummary, UnconvertedAmount,
 )
+from app.services.auth import get_current_user
 from app.services.card_statements import compute_statement_totals
 from app.services.exchange_rates import convert
 
@@ -39,25 +40,31 @@ def _month_bounds(month: str | None) -> tuple[date_type, date_type, str]:
     return date_type(year, month_num, 1), date_type(year, month_num, last_day), f"{year:04d}-{month_num:02d}"
 
 
-def _statement_payment_transaction_ids() -> Select:
+def _statement_payment_transaction_ids(user_id: int) -> Select:
     """Subquery: ids de Transaction que son el pago de un resumen. Se excluyen de los reportes
     de ingreso/gasto porque ya se contaron como gasto en el momento de la compra -- si no, un
     pago de resumen se contaría dos veces (una al comprar, otra al pagar)."""
     return select(CardStatement.payment_transaction_id).where(
-        CardStatement.payment_transaction_id.is_not(None)
+        CardStatement.payment_transaction_id.is_not(None), CardStatement.user_id == user_id
     )
 
 
 @router.get("/summary", response_model=DashboardSummary)
 async def get_summary(
-    month: str | None = None, session: AsyncSession = Depends(get_session)
+    month: str | None = None,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> DashboardSummary:
     reference_currency = get_settings().default_currency
     start, end, month_label = _month_bounds(month)
     today = date_type.today()
 
     accounts = (
-        await session.execute(select(Account).where(Account.is_archived.is_(False)))
+        await session.execute(
+            select(Account).where(
+                Account.user_id == current_user.id, Account.is_archived.is_(False)
+            )
+        )
     ).scalars().all()
 
     total_balance = Decimal("0.00")
@@ -70,10 +77,10 @@ async def get_summary(
             total_balance += converted
 
     month_income = await _sum_transactions_converted(
-        session, TransactionType.INCOME, start, end, reference_currency, today
+        session, current_user.id, TransactionType.INCOME, start, end, reference_currency, today
     )
     month_expenses = await _sum_transactions_converted(
-        session, TransactionType.EXPENSE, start, end, reference_currency, today
+        session, current_user.id, TransactionType.EXPENSE, start, end, reference_currency, today
     )
 
     return DashboardSummary(
@@ -91,6 +98,7 @@ async def get_summary(
 
 async def _sum_transactions_converted(
     session: AsyncSession,
+    user_id: int,
     type_: TransactionType,
     start: date_type,
     end: date_type,
@@ -98,10 +106,11 @@ async def _sum_transactions_converted(
     as_of: date_type,
 ) -> Decimal:
     stmt = select(Transaction.amount, Transaction.currency).where(
+        Transaction.user_id == user_id,
         Transaction.type == type_,
         Transaction.date >= start,
         Transaction.date <= end,
-        Transaction.id.not_in(_statement_payment_transaction_ids()),
+        Transaction.id.not_in(_statement_payment_transaction_ids(user_id)),
     )
     rows = (await session.execute(stmt)).all()
 
@@ -115,7 +124,9 @@ async def _sum_transactions_converted(
 
 @router.get("/spending-by-category", response_model=list[CategorySpending])
 async def get_spending_by_category(
-    month: str | None = None, session: AsyncSession = Depends(get_session)
+    month: str | None = None,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> list[CategorySpending]:
     reference_currency = get_settings().default_currency
     start, end, _ = _month_bounds(month)
@@ -131,10 +142,11 @@ async def get_spending_by_category(
         )
         .join(Category, Category.id == Transaction.category_id, isouter=True)
         .where(
+            Transaction.user_id == current_user.id,
             Transaction.type == TransactionType.EXPENSE,
             Transaction.date >= start,
             Transaction.date <= end,
-            Transaction.id.not_in(_statement_payment_transaction_ids()),
+            Transaction.id.not_in(_statement_payment_transaction_ids(current_user.id)),
         )
     )
     rows = (await session.execute(stmt)).all()
@@ -158,7 +170,9 @@ async def get_spending_by_category(
 
 @router.get("/cash-flow-projection", response_model=CashFlowProjection)
 async def get_cash_flow_projection(
-    months: int = 6, session: AsyncSession = Depends(get_session)
+    months: int = 6,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> CashFlowProjection:
     if not 1 <= months <= 24:
         raise HTTPException(
@@ -176,6 +190,7 @@ async def get_cash_flow_projection(
     statements = (
         await session.execute(
             select(CardStatement).where(
+                CardStatement.user_id == current_user.id,
                 CardStatement.status != StatementStatus.PAID,
                 CardStatement.payment_due_date >= range_start,
                 CardStatement.payment_due_date <= range_end,

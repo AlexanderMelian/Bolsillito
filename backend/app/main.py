@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings
 from app.routers import (
-    accounts, assets, cards, categories, dashboard, exchange_rates, installment_plans,
+    accounts, assets, auth, cards, categories, dashboard, exchange_rates, installment_plans,
     investments, transactions,
 )
 
@@ -21,6 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router, prefix="/api/v1")
 app.include_router(accounts.router, prefix="/api/v1")
 app.include_router(cards.router, prefix="/api/v1")
 app.include_router(categories.router, prefix="/api/v1")

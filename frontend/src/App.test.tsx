@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { useAuthStore } from '@/stores/authStore'
 import { renderWithProviders } from '@/test-utils'
 
 import App from './App'
@@ -41,10 +42,24 @@ function stubFetch() {
 describe('App routing', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', stubFetch())
+    useAuthStore.setState({ token: 'tok', user: { id: 1, username: 'ana' } })
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    useAuthStore.setState({ token: null, user: null })
+  })
+
+  it('shows the login page when there is no session', async () => {
+    useAuthStore.setState({ token: null, user: null })
+
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/cuentas']}>
+        <App />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Iniciá sesión para continuar')).toBeInTheDocument()
   })
 
   it('shows the dashboard on the root route', async () => {
@@ -55,6 +70,20 @@ describe('App routing', () => {
     )
 
     expect(await screen.findByText('Patrimonio total')).toBeInTheDocument()
+  })
+
+  it('logs out and shows the login page when "Salir" is clicked', async () => {
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    )
+    await screen.findByText('Patrimonio total')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Salir' }))
+
+    expect(await screen.findByText('Iniciá sesión para continuar')).toBeInTheDocument()
+    expect(useAuthStore.getState().token).toBeNull()
   })
 
   it('navigates between Resumen, Cuentas and Movimientos', async () => {

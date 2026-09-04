@@ -1,8 +1,9 @@
 # Plan de Pruebas — Bolsillito
 
-> **Estado:** 161 tests backend (100% cobertura de línea en `app/`, gate `--cov-fail-under=95`)
-> + 63 tests frontend (gate 80% líneas/statements/funcs, 70% branches) — los 4 módulos del MVP.
-> Ambas suites en verde. Ver `backend/tests/` y `frontend/src/**/*.test.{ts,tsx}`.
+> **Estado:** 177 tests backend (99.67% cobertura de línea en `app/`, gate `--cov-fail-under=95`)
+> + 81 tests frontend (gate 80% líneas/statements/funcs, 70% branches) — los 4 módulos del MVP
+> más el Módulo 5 (multi-usuario). Ambas suites en verde. Ver `backend/tests/` y
+> `frontend/src/**/*.test.{ts,tsx}`.
 
 ## Backend (pytest)
 
@@ -17,9 +18,21 @@ durante Fase 1 — ver `agents.md`).
 Cada test corre dentro de un `SAVEPOINT` que se descarta al terminar (`backend/tests/conftest.py`,
 fixture `db_session` con `join_transaction_mode="create_savepoint"`), así quedan aislados entre
 sí aunque el código bajo prueba haga su propio `session.commit()` — no hace falta recrear las
-tablas en cada test. El fixture `client` (mismo archivo) monta un `AsyncClient` contra la app
-real con `get_session` overrideado para usar esa misma `db_session`: los tests de endpoint
-ejercitan el stack completo (router → schema → service → DB) sin mockear nada.
+tablas en cada test.
+
+**Fixtures de auth** (mismo archivo): `user` crea y commitea un `User` de prueba dentro del mismo
+`SAVEPOINT` (se descarta con el resto al terminar el test); `other_user` es un segundo usuario
+para los tests de aislamiento; `unauthenticated_client` monta un `AsyncClient` contra la app real
+con `get_session` overrideado a la misma `db_session`, sin header de auth; `client` es igual pero
+con `Authorization: Bearer <token de user>` ya puesto — es lo que usa casi toda la suite
+existente, que no le importa la identidad del usuario, solo que la request esté autenticada. Un
+test que necesita **dos** usuarios autenticados a la vez (aislamiento cruzado) arma su propio
+segundo `AsyncClient` a mano con el token de `other_user` — ver `_client_for` en
+`test_ownership_isolation.py`.
+
+Todo objeto creado directo por ORM en un test (no vía API) tiene que llevar `user_id=user.id`
+(o `other_user.id`) explícito — la columna es `NOT NULL` en casi todas las tablas salvo
+`installment_items` y `exchange_rates` (ver `agents.md` § Decisiones de negocio #4).
 
 **Ojo con los scripts de debug ad-hoc** (ej. `python -c "..."` para reproducir un bug a mano
 fuera de pytest): `app.database.async_session_factory` apunta a `DATABASE_URL` de
@@ -41,8 +54,10 @@ no se cargaron a mano.
 | `test_card_statements_api.py` | Cálculo de `total_amount`/`status` combinando cuotas + gastos de pago único, incluida la regresión de "un gasto único a crédito tiene que generar su propio resumen"; flujo de pago (débito real de la cuenta, no se puede pagar dos veces ni un resumen en `$0`). |
 | `test_exchange_rates_api.py` | Upsert de cotizaciones (mismo par+fecha actualiza en vez de fallar). |
 | `test_dashboard_api.py` | Consolidación multi-moneda (directa, inversa, sin cotización), exclusión de pagos de resumen en los reportes de ingreso/gasto, agrupación por categoría, proyección de flujo de caja (incluye meses en `$0`, excluye resúmenes pagados). |
-| `test_assets_api.py` | CRUD del catálogo de activos, `409` por ticker+tipo duplicado o por borrar un activo con transacciones. |
+| `test_assets_api.py` | CRUD del catálogo de activos, `409` por ticker+tipo duplicado (por usuario) o por borrar un activo con transacciones. |
 | `test_investments_api.py` | Efecto sobre el saldo por tipo (compra/venta/dividendo, con y sin cuenta asociada), validaciones (moneda de la cuenta ≠ activo, vender más de lo que se tiene, fee mayor al monto neto), costo promedio ponderado a través de dos lotes, que una venta no cambie el costo promedio de lo que queda, ganancia realizada, borrado con reversión de saldo y con bloqueo si dejaría la posición negativa, consolidación multi-moneda del `/portfolio`. |
+| `test_auth_api.py` | Registro (éxito, username duplicado → `409`, username/password cortos → `422`), login (éxito, credenciales inválidas → `401`), `GET /auth/me` (con token válido, sin token, con token inválido → `401`). |
+| `test_ownership_isolation.py` | El usuario A no puede ver/editar/borrar cuentas, tarjetas, transacciones ni activos del usuario B vía API (`404`, no `403`, incluso conociendo el id); tampoco puede crear un recurso contra una cuenta/tarjeta ajena. Confirma también que la unicidad de `(ticker, type)` en activos es por usuario, no global. |
 
 ### Patrones a seguir en tests nuevos
 
@@ -58,8 +73,9 @@ no se cargaron a mano.
   `services/`, testeada sin DB primero (`test_billing_cycle.py` es el ejemplo de referencia),
   *además* del test de integración que verifica que el endpoint la use bien.
 
-**Gate:** `--cov-fail-under=95` en `pytest.ini`, hoy en 100%. Si un módulo nuevo lo baja, se sube
-la cobertura de ese módulo antes de seguir — no se baja el umbral.
+**Gate:** `--cov-fail-under=95` en `pytest.ini`, hoy en 99.67% (las únicas líneas sin cubrir son
+un par de ramas de error de `services/auth.py` y `routers/cards.py`). Si un módulo nuevo lo baja,
+se sube la cobertura de ese módulo antes de seguir — no se baja el umbral.
 
 ## Frontend (Vitest + Testing Library)
 
@@ -75,6 +91,15 @@ en el mock hay que chequear `init.method === undefined`, no `!init` (un `!init` 
 ```ts
 if (url.endsWith('/api/v1/accounts') && (!init || init.method === undefined)) { /* GET */ }
 ```
+
+**`authStore` en tests**: `apiRequest` (`lib/api/client.ts`) lee el token de `useAuthStore.
+getState()`. Los tests de features individuales (`AccountFormDialog`, etc.) montan el componente
+directo con `renderWithProviders`, sin pasar por `App`, así que corren con `authStore` en su
+estado inicial (`token: null`) — no importa para esos tests porque igual mockean `fetch`
+directamente, sin mirar los headers. Los tests que sí montan `<App />` (`App.test.tsx`) necesitan
+`useAuthStore.setState({ token: ..., user: ... })` en el `beforeEach` para pasar el gate de login
+(salvo el test que verifica explícitamente el caso sin sesión) — y limpiar `authStore` en el
+`afterEach`, porque el store es un singleton que persiste entre tests del mismo archivo.
 
 **Selects de shadcn (Radix)**: jsdom no implementa `hasPointerCapture`/`scrollIntoView`, que
 Radix necesita para manejar el puntero. Los polyfills ya están en `src/setupTests.ts` — si un
@@ -96,8 +121,9 @@ correctos según los datos mockeados, no por el contenido del `<svg>`.
 | Movimientos | `TransactionsList`, `TransactionFormDialog`, `InstallmentPurchaseDialog` | Campos condicionales según `type` (cuenta destino solo en transferencia, tarjeta solo en gasto), preview de monto por cuota, borrado deshabilitado si está ligado a un plan de cuotas. |
 | Dashboard | `SummaryCards`, `SpendingByCategoryChart`, `CashFlowChart`, `ExchangeRatesSection` | Estados de carga/error/vacío, formato de montos, alta de cotización. |
 | Inversiones | `AssetsList`, `AssetFormDialog`, `InvestmentTransactionFormDialog`, `PortfolioSummary` | Alta/borrado de activos, hint de la convención de dividendos (solo visible con `type=dividend`), estado vacío ("cargá un activo primero"), totales consolidados y aviso de montos sin convertir. |
-| Ruteo | `App.test.tsx` | Navegación entre `/`, `/cuentas`, `/movimientos`, `/inversiones`. |
-| API client | `lib/api/client.test.ts` | `ApiError` en respuestas no-OK, `undefined` en `204`, mensaje genérico si el body de error no es JSON. |
+| Ruteo | `App.test.tsx` | Sin sesión muestra el login en cualquier ruta; navegación entre `/`, `/cuentas`, `/movimientos`, `/inversiones` con sesión; logout ("Salir") vuelve al login. |
+| Auth | `LoginPage.test.tsx`, `RegisterPage.test.tsx`, `stores/authStore.test.ts`, `lib/api/auth.test.ts` | Login/registro exitoso (guarda token+user), credenciales inválidas, username duplicado (409). |
+| API client | `lib/api/client.test.ts` | `ApiError` en respuestas no-OK, `undefined` en `204`, mensaje genérico si el body de error no es JSON, header `Authorization` agregado solo si hay token, logout local automático ante un `401`. |
 
 **Gate:** 80% líneas/statements/funcs, 70% branches (`vitest.config.ts` → `coverage.thresholds`).
 Más laxo que el backend a propósito: hay bastante código de vendor (shadcn, Radix) que igual se

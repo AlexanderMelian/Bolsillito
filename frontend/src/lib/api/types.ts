@@ -1,3 +1,24 @@
+export interface UserRead {
+  id: number
+  username: string
+}
+
+export interface Token {
+  access_token: string
+  token_type: string
+  user: UserRead
+}
+
+export interface RegisterInput {
+  username: string
+  password: string
+}
+
+export interface LoginInput {
+  username: string
+  password: string
+}
+
 export type AccountType = 'bank' | 'cash' | 'wallet' | 'investment'
 export type CardType = 'debit' | 'credit'
 export type TransactionType = 'income' | 'expense' | 'transfer'

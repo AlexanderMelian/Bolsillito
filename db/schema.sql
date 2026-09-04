@@ -11,8 +11,20 @@ CREATE TYPE category_kind AS ENUM ('income', 'expense', 'transfer');
 CREATE TYPE asset_type AS ENUM ('stock', 'bond', 'crypto', 'fund', 'other');
 CREATE TYPE investment_tx_type AS ENUM ('buy', 'sell', 'dividend');
 
+CREATE TABLE users (
+    id                SERIAL PRIMARY KEY,
+    username          VARCHAR(50) NOT NULL UNIQUE,
+    hashed_password   VARCHAR(255) NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Multi-tenant: casi todo lo demás cuelga de un usuario. `exchange_rates` es la única
+-- excepción a propósito -- una cotización de mercado no es información personal, se comparte
+-- entre todos los usuarios (ver agents.md § Decisiones de negocio).
+
 CREATE TABLE accounts (
     id            SERIAL PRIMARY KEY,
+    user_id       INTEGER NOT NULL REFERENCES users(id),
     name          VARCHAR(80) NOT NULL,
     type          account_type NOT NULL,
     currency      CHAR(3) NOT NULL DEFAULT 'ARS',
@@ -20,9 +32,11 @@ CREATE TABLE accounts (
     is_archived   BOOLEAN NOT NULL DEFAULT FALSE,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX ix_accounts_user_id ON accounts (user_id);
 
 CREATE TABLE cards (
     id                  SERIAL PRIMARY KEY,
+    user_id             INTEGER NOT NULL REFERENCES users(id),
     account_id          INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     payment_account_id  INTEGER REFERENCES accounts(id),
     name                VARCHAR(80) NOT NULL,
@@ -36,16 +50,21 @@ CREATE TABLE cards (
         type = 'debit' OR (closing_day IS NOT NULL AND payment_day IS NOT NULL)
     )
 );
+CREATE INDEX ix_cards_user_id ON cards (user_id);
 
 CREATE TABLE categories (
-    id      SERIAL PRIMARY KEY,
-    name    VARCHAR(50) NOT NULL UNIQUE,
-    icon    VARCHAR(50),
-    kind    category_kind NOT NULL
+    id       SERIAL PRIMARY KEY,
+    user_id  INTEGER NOT NULL REFERENCES users(id),
+    name     VARCHAR(50) NOT NULL,
+    icon     VARCHAR(50),
+    kind     category_kind NOT NULL,
+    CONSTRAINT uq_category_user_name UNIQUE (user_id, name)
 );
+CREATE INDEX ix_categories_user_id ON categories (user_id);
 
 CREATE TABLE installment_plans (
     id                  SERIAL PRIMARY KEY,
+    user_id             INTEGER NOT NULL REFERENCES users(id),
     card_id             INTEGER NOT NULL REFERENCES cards(id),
     category_id         INTEGER REFERENCES categories(id),
     description         VARCHAR(255) NOT NULL,
@@ -55,9 +74,11 @@ CREATE TABLE installment_plans (
     CONSTRAINT ck_plan_installments_positive CHECK (total_installments > 0),
     CONSTRAINT ck_plan_amount_positive CHECK (total_amount > 0)
 );
+CREATE INDEX ix_installment_plans_user_id ON installment_plans (user_id);
 
 CREATE TABLE card_statements (
     id                      SERIAL PRIMARY KEY,
+    user_id                 INTEGER NOT NULL REFERENCES users(id),
     card_id                 INTEGER NOT NULL REFERENCES cards(id),
     closing_date            DATE NOT NULL,
     payment_due_date        DATE NOT NULL,
@@ -66,6 +87,7 @@ CREATE TABLE card_statements (
     payment_transaction_id  INTEGER, -- FK agregada luego de crear `transactions` (ver abajo)
     CONSTRAINT uq_card_statement_period UNIQUE (card_id, closing_date)
 );
+CREATE INDEX ix_card_statements_user_id ON card_statements (user_id);
 
 CREATE TABLE installment_items (
     id             SERIAL PRIMARY KEY,
@@ -78,6 +100,7 @@ CREATE TABLE installment_items (
 
 CREATE TABLE transactions (
     id                       SERIAL PRIMARY KEY,
+    user_id                  INTEGER NOT NULL REFERENCES users(id),
     type                     transaction_type NOT NULL,
     account_id               INTEGER NOT NULL REFERENCES accounts(id),
     destination_account_id   INTEGER REFERENCES accounts(id),
@@ -95,6 +118,7 @@ CREATE TABLE transactions (
         type <> 'transfer' OR (destination_account_id IS NOT NULL AND destination_account_id <> account_id)
     )
 );
+CREATE INDEX ix_transactions_user_id ON transactions (user_id);
 
 ALTER TABLE card_statements
     ADD CONSTRAINT fk_statement_payment_transaction
@@ -102,15 +126,18 @@ ALTER TABLE card_statements
 
 CREATE TABLE assets (
     id        SERIAL PRIMARY KEY,
+    user_id   INTEGER NOT NULL REFERENCES users(id),
     ticker    VARCHAR(20) NOT NULL,
     name      VARCHAR(120) NOT NULL,
     type      asset_type NOT NULL,
     currency  CHAR(3) NOT NULL DEFAULT 'USD',
-    CONSTRAINT uq_asset_ticker_type UNIQUE (ticker, type)
+    CONSTRAINT uq_asset_user_ticker_type UNIQUE (user_id, ticker, type)
 );
+CREATE INDEX ix_assets_user_id ON assets (user_id);
 
 CREATE TABLE investment_transactions (
     id          SERIAL PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id),
     asset_id    INTEGER NOT NULL REFERENCES assets(id),
     account_id  INTEGER REFERENCES accounts(id),
     type        investment_tx_type NOT NULL,
@@ -120,11 +147,13 @@ CREATE TABLE investment_transactions (
     date        DATE NOT NULL,
     CONSTRAINT ck_inv_qty_positive CHECK (quantity > 0)
 );
+CREATE INDEX ix_investment_transactions_user_id ON investment_transactions (user_id);
 
 ALTER TABLE transactions
     ADD CONSTRAINT transactions_investment_transaction_id_fkey
     FOREIGN KEY (investment_transaction_id) REFERENCES investment_transactions(id);
 
+-- Sin user_id: una cotización de mercado es un dato compartido, no personal (ver arriba).
 CREATE TABLE exchange_rates (
     id             SERIAL PRIMARY KEY,
     from_currency  CHAR(3) NOT NULL,

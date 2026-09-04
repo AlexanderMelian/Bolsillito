@@ -1,8 +1,8 @@
 # Especificación de API — Bolsillito
 
 > **Estado:** implementado y testeado — los 4 módulos del MVP (Cuentas/Tarjetas,
-> Transacciones/Cuotas, Dashboard/Reportes, Inversiones). Ver `agents.md` § Pendientes para lo
-> que queda afuera del MVP (CI, tema oscuro, transferencias multi-moneda).
+> Transacciones/Cuotas, Dashboard/Reportes, Inversiones) más el Módulo 5 (multi-usuario). Ver
+> `agents.md` § Pendientes para lo que queda afuera del alcance actual.
 
 La fuente de verdad interactiva es el OpenAPI que expone FastAPI en `/docs` (Swagger UI) y
 `/redoc` con el backend corriendo. Este documento es la referencia legible sin levantar nada,
@@ -29,6 +29,37 @@ tira 409 vs 422).
     (`"La operación viola una regla de integridad de datos."`); si hace falta un mensaje más
     específico para un caso puntual, se valida antes en Pydantic o a mano en el router (ver
     ejemplos de 409 explícitos más abajo).
+
+## Autenticación
+
+Todos los endpoints, salvo `POST /auth/register` y `POST /auth/login`, requieren
+`Authorization: Bearer <token>`. Sin ese header (o con un token inválido/vencido): `401` con
+`{"detail": "No autenticado"}` y header `WWW-Authenticate: Bearer`.
+
+Casi todas las tablas tienen `user_id` y cada endpoint filtra/valida por el usuario autenticado.
+**Un recurso que existe pero pertenece a otro usuario devuelve `404`, igual que uno inexistente**
+— nunca `403` — para no revelar su existencia. Esto aplica también a las FKs que se mandan en el
+body de un create/update (ej. `account_id` en `POST /transactions`): si esa cuenta es de otro
+usuario, es `404`, no `422`. Única excepción: `/exchange-rates` no filtra por usuario (ver esa
+sección) aunque sigue requiriendo estar autenticado.
+
+### `/auth`
+
+| Método | Path | Notas |
+|---|---|---|
+| POST | `/auth/register` | `201`. Crea el usuario y devuelve un `Token` ya logueado. `409` si el username ya existe. |
+| POST | `/auth/login` | `200`. Devuelve un `Token`. `401` si el usuario no existe o la contraseña no matchea. |
+| GET | `/auth/me` | `200`. Requiere token. Devuelve el `UserRead` del usuario autenticado. |
+
+**`UserCreate`** (body de `/register`): `username: str` (≥ 3 caracteres, `422` si no),
+`password: str` (≥ 8 caracteres, `422` si no).
+**`LoginRequest`** (body de `/login`): `username: str`, `password: str`.
+**`UserRead`**: `id: int`, `username: str`.
+**`Token`**: `access_token: str`, `token_type: "bearer"`, `user: UserRead`.
+
+El token es un JWT (`PyJWT`, HS256) con `sub = str(user_id)`, sin refresh token y sin forma de
+invalidarlo antes de que expire (dura 7 días, `access_token_expire_minutes` en `config.py`) — ver
+"algo sencillo" en `agents.md` § Decisiones de negocio #4.
 
 ---
 
@@ -101,9 +132,10 @@ Crea una `Transaction` tipo `expense` contra la cuenta de pago de la tarjeta por
 ## Categorías — `/categories`
 
 CRUD estándar (`GET`, `POST`→`201`, `GET/{id}`, `PATCH/{id}`, `DELETE/{id}`→`204`).
-**`CategoryCreate`**: `name: str` (único), `kind: "income"|"expense"|"transfer"`,
-`icon: str? = null` (un emoji, texto libre). `DELETE` da `409` si la categoría está referenciada
-por alguna transacción o plan de cuotas.
+**`CategoryCreate`**: `name: str` (único **por usuario** — dos usuarios pueden tener cada uno una
+categoría "Comida"), `kind: "income"|"expense"|"transfer"`, `icon: str? = null` (un emoji, texto
+libre). `DELETE` da `409` si la categoría está referenciada por alguna transacción o plan de
+cuotas.
 
 ---
 
@@ -213,6 +245,11 @@ Respuesta `201` (tarjeta con `closing_day=15`: la compra del 14/03 cae en el cic
 
 ## Cotizaciones — `/exchange-rates`
 
+**Sin `user_id`** — a diferencia de todo lo demás en esta API, una cotización de mercado
+(ARS→USD del 2026-03-14, por ejemplo) no es un dato personal, es un hecho del mundo que todos los
+usuarios comparten; si el usuario A carga la cotización del día, el usuario B la ve también. Los
+endpoints igual requieren `Authorization: Bearer <token>` (cualquier usuario autenticado sirve).
+
 | Método | Path | Notas |
 |---|---|---|
 | GET | `/exchange-rates` | Ordenadas por `date` descendente. |
@@ -289,8 +326,9 @@ calculado (ver `/cards/{id}/statements` más arriba) de los `CardStatement` no p
 
 CRUD estándar (`GET`, `POST`→`201`, `GET/{id}`, `PATCH/{id}`, `DELETE/{id}`→`204`).
 **`AssetCreate`**: `ticker: str`, `name: str`, `type: "stock"|"bond"|"crypto"|"fund"|"other"`,
-`currency: str = "USD"`. `(ticker, type)` es único — `409` si se repite. `DELETE` da `409` si el
-activo tiene transacciones cargadas.
+`currency: str = "USD"`. `(user_id, ticker, type)` es único — `409` si el mismo usuario lo repite
+(dos usuarios sí pueden tener cada uno un `AAPL`/`stock`). `DELETE` da `409` si el activo tiene
+transacciones cargadas.
 
 ---
 

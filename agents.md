@@ -77,6 +77,22 @@ fácil que replicar el setup completo de dev con dos bases.
   archivo por recurso), `app/services/` (lógica de negocio, ej. `billing_cycle.py`).
 - La lógica de ciclos de facturación y cuotas vive en `app/services/billing_cycle.py` — no debe
   duplicarse en routers.
+- **Multi-usuario: todo endpoint nuevo (salvo `/auth/*` y `/exchange-rates`) necesita
+  `current_user: User = Depends(get_current_user)`** (`app/services/auth.py`). Cualquier query
+  de listado filtra por `Model.user_id == current_user.id`; cualquier `_get_*_or_404` filtra
+  igual (nunca solo por `id`); cualquier FK que venga en el payload de un create/update se valida
+  por ownership (existe **y** pertenece al usuario), no solo por existencia -- si no, es un IDOR.
+  Un recurso que existe pero es de otro usuario devuelve **404, no 403** (no revelar que existe).
+  Ver `app/routers/accounts.py` o `app/routers/transactions.py` (`_validate_and_resolve`) como
+  referencia. `exchange_rates` es la única tabla sin `user_id` (cotización de mercado, dato
+  compartido) pero sus endpoints igual requieren `get_current_user` -- ver decisión #4.
+- **Bug real encontrado al migrar a multi-usuario**: `services/card_statements.pay_statement`
+  creaba la `Transaction` de pago de un resumen sin `user_id` -- no lo agarró ningún test viejo
+  porque ninguno pagaba un resumen y después intentaba leerlo filtrado por usuario. Al volverse
+  `NOT NULL` la columna, esto habría roto todo pago de resumen en producción. Moraleja: cuando se
+  agrega una columna `NOT NULL` nueva, no alcanza con revisar los `routers/` -- hay que revisar
+  también todo `services/` que construya un modelo directamente (`Model(...)`), porque ahí no hay
+  `current_user` a mano y es fácil que quede afuera del `grep` mental de "dónde se crea esto".
 - Errores: los `CheckConstraint`/`UniqueConstraint`/FK del modelo son la última línea de
   defensa, pero cuando se pueden validar antes de tocar la DB (ej. tarjeta de crédito sin
   `closing_day`/`payment_day`) se valida también en el schema Pydantic (`model_validator`) para
@@ -188,6 +204,8 @@ fácil que replicar el setup completo de dev con dos bases.
 - [x] **Fase 2 — Módulo 3: Dashboard y Reportes** (agregaciones, gráficos, flujo de caja
       proyectado).
 - [x] **Fase 2 — Módulo 4: Inversiones** (portafolio, precio promedio ponderado).
+- [x] **Fase 2 — Módulo 5: Multi-usuario** (registro/login usuario+contraseña, JWT, aislamiento
+      de datos por `user_id`).
 
 ## 🔜 Pendientes / próximos pasos
 
@@ -213,8 +231,13 @@ re-descubrirlo desde cero en la próxima sesión:
   code-splitting por ruta (`React.lazy` en `app/pages/`).
 
 **Deuda técnica intencional (documentada, no urgente)**
-- Mono-usuario sin autenticación (decisión #4) — si se agrega, todas las entidades necesitan
-  `user_id` y hay que revisar cada query para que filtre por usuario.
+- Auth "algo sencillo" (decisión #4): sin refresh tokens, sin reseteo de contraseña, sin
+  verificación de email, sin rate-limiting de login. El JWT dura 7 días (`access_token_expire_
+  minutes` en `config.py`) y no hay forma de invalidarlo antes de que expire salvo cambiar
+  `secret_key`. Si esto se vuelve una app real con más de un usuario de confianza, hay que
+  sumar esas piezas.
+- `SECRET_KEY` de desarrollo (`dev-only-insecure-secret-key-change-me` en `config.py`) tiene que
+  reemplazarse por un valor real vía variable de entorno antes de cualquier despliegue.
 - `python3.14-venv` no viene instalado por defecto en el sistema (`sudo apt install
   python3.14-venv`) — si `backend/venv` se recrea desde cero en una máquina nueva sin ese
   paquete, `python -m venv` falla con `ensurepip` faltante.
@@ -227,8 +250,13 @@ re-descubrirlo desde cero en la próxima sesión:
    recién cuando se paga el resumen (`CardStatement`).
 3. El dashboard debe mostrar una proyección de flujo de caja con los gastos comprometidos
    (cuotas pendientes) de los próximos meses.
-4. MVP mono-usuario, sin autenticación. No agregar tablas `users`/JWT sin que se pida
-   explícitamente.
+4. ~~MVP mono-usuario, sin autenticación~~ — **superada**: la app es multi-usuario desde el
+   Módulo 5. Registro/login con usuario+contraseña (sin email), JWT bearer (`PyJWT`, HS256,
+   7 días, sin refresh token), contraseñas con `bcrypt`. Casi todas las tablas tienen `user_id`
+   y cada endpoint filtra/valida ownership por el usuario autenticado (`get_current_user`);
+   un recurso de otro usuario da 404, no 403, para no revelar que existe. Única excepción:
+   `exchange_rates` sigue sin `user_id` (es cotización de mercado compartida, no dato personal),
+   aunque sus endpoints ahora requieren estar autenticado igual que el resto.
 5. Soporte multi-moneda desde el día uno (`currency` por cuenta/activo + tabla
    `exchange_rates` cargada manualmente).
 6. Simplificación deliberada (Módulo 2): una transferencia solo puede ser entre cuentas de la

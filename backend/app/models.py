@@ -65,10 +65,22 @@ class InvestmentTxType(str, enum.Enum):
     DIVIDEND = "dividend"
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True)
+    hashed_password: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class Account(Base):
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     name: Mapped[str] = mapped_column(String(80))
     type: Mapped[AccountType] = mapped_column(pg_enum(AccountType, name="account_type"))
     currency: Mapped[str] = mapped_column(String(3), default="ARS")  # ISO 4217
@@ -90,6 +102,7 @@ class Card(Base):
     __tablename__ = "cards"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
     # Para tarjetas de crédito: cuenta desde la que se paga el resumen (normalmente == account_id,
     # pero se separa por si el usuario paga la tarjeta desde otra cuenta).
@@ -125,15 +138,19 @@ class Category(Base):
     __tablename__ = "categories"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(50), unique=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(50))
     icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
     kind: Mapped[TransactionType] = mapped_column(pg_enum(TransactionType, name="category_kind"))
+
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_category_user_name"),)
 
 
 class Transaction(Base):
     __tablename__ = "transactions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     type: Mapped[TransactionType] = mapped_column(
         pg_enum(TransactionType, name="transaction_type")
     )
@@ -175,6 +192,7 @@ class InstallmentPlan(Base):
     __tablename__ = "installment_plans"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"))
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
     description: Mapped[str] = mapped_column(String(255))
@@ -221,6 +239,7 @@ class CardStatement(Base):
     __tablename__ = "card_statements"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"))
     closing_date: Mapped[date] = mapped_column(Date)
     payment_due_date: Mapped[date] = mapped_column(Date)
@@ -244,12 +263,15 @@ class Asset(Base):
     __tablename__ = "assets"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     ticker: Mapped[str] = mapped_column(String(20))
     name: Mapped[str] = mapped_column(String(120))
     type: Mapped[AssetType] = mapped_column(pg_enum(AssetType, name="asset_type"))
     currency: Mapped[str] = mapped_column(String(3), default="USD")
 
-    __table_args__ = (UniqueConstraint("ticker", "type", name="uq_asset_ticker_type"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "ticker", "type", name="uq_asset_user_ticker_type"),
+    )
 
 
 class InvestmentTransaction(Base):
@@ -259,6 +281,7 @@ class InvestmentTransaction(Base):
     __tablename__ = "investment_transactions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"))
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
     type: Mapped[InvestmentTxType] = mapped_column(

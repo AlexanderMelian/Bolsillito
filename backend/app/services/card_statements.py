@@ -28,6 +28,7 @@ async def get_or_create_statement(session: AsyncSession, card: Card, closing_dat
     ).scalar_one_or_none()
     if statement is None:
         statement = CardStatement(
+            user_id=card.user_id,
             card_id=card.id,
             closing_date=closing_date,
             payment_due_date=get_payment_due_date(closing_date, card.payment_day),
@@ -90,6 +91,7 @@ async def pay_statement(
     payment_account_id = card.payment_account_id or card.account_id
 
     payment = Transaction(
+        user_id=card.user_id,
         type=TransactionType.EXPENSE,
         account_id=payment_account_id,
         amount=total_amount,

@@ -5,8 +5,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
-from app.models import Account, Card, CardType, Category, Transaction, TransactionType
+from app.models import Account, Card, CardType, Category, Transaction, TransactionType, User
 from app.schemas.transactions import TransactionCreate, TransactionRead, TransactionUpdate
+from app.services.auth import get_current_user
 from app.services.balances import apply_transaction_balance_effect
 from app.services.billing_cycle import get_statement_closing_date
 from app.services.card_statements import get_or_create_statement
@@ -14,8 +15,16 @@ from app.services.card_statements import get_or_create_statement
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
 
-async def _get_transaction_or_404(transaction_id: int, session: AsyncSession) -> Transaction:
-    transaction = await session.get(Transaction, transaction_id)
+async def _get_transaction_or_404(
+    transaction_id: int, user: User, session: AsyncSession
+) -> Transaction:
+    transaction = (
+        await session.execute(
+            select(Transaction).where(
+                Transaction.id == transaction_id, Transaction.user_id == user.id
+            )
+        )
+    ).scalar_one_or_none()
     if transaction is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Movimiento no encontrado"
@@ -24,15 +33,23 @@ async def _get_transaction_or_404(transaction_id: int, session: AsyncSession) ->
 
 
 async def _validate_and_resolve(
-    payload: TransactionCreate, session: AsyncSession
+    payload: TransactionCreate, user: User, session: AsyncSession
 ) -> tuple[Account, Card | None]:
-    account = await session.get(Account, payload.account_id)
+    account = (
+        await session.execute(
+            select(Account).where(Account.id == payload.account_id, Account.user_id == user.id)
+        )
+    ).scalar_one_or_none()
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cuenta no encontrada")
 
     card: Card | None = None
     if payload.card_id is not None:
-        card = await session.get(Card, payload.card_id)
+        card = (
+            await session.execute(
+                select(Card).where(Card.id == payload.card_id, Card.user_id == user.id)
+            )
+        ).scalar_one_or_none()
         if card is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tarjeta no encontrada")
         if card.account_id != payload.account_id:
@@ -42,7 +59,13 @@ async def _validate_and_resolve(
             )
 
     if payload.type == TransactionType.TRANSFER:
-        destination = await session.get(Account, payload.destination_account_id)
+        destination = (
+            await session.execute(
+                select(Account).where(
+                    Account.id == payload.destination_account_id, Account.user_id == user.id
+                )
+            )
+        ).scalar_one_or_none()
         if destination is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Cuenta de destino no encontrada"
@@ -54,7 +77,13 @@ async def _validate_and_resolve(
             )
 
     if payload.category_id is not None:
-        category = await session.get(Category, payload.category_id)
+        category = (
+            await session.execute(
+                select(Category).where(
+                    Category.id == payload.category_id, Category.user_id == user.id
+                )
+            )
+        ).scalar_one_or_none()
         if category is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Categoría no encontrada"
@@ -81,9 +110,14 @@ async def list_transactions(
     type: TransactionType | None = None,
     date_from: date_ | None = None,
     date_to: date_ | None = None,
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[Transaction]:
-    stmt = select(Transaction).order_by(Transaction.date.desc(), Transaction.id.desc())
+    stmt = (
+        select(Transaction)
+        .where(Transaction.user_id == current_user.id)
+        .order_by(Transaction.date.desc(), Transaction.id.desc())
+    )
     if account_id is not None:
         stmt = stmt.where(
             (Transaction.account_id == account_id)
@@ -102,13 +136,15 @@ async def list_transactions(
 
 @router.post("", response_model=TransactionRead, status_code=status.HTTP_201_CREATED)
 async def create_transaction(
-    payload: TransactionCreate, session: AsyncSession = Depends(get_session)
+    payload: TransactionCreate,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> Transaction:
-    account, card = await _validate_and_resolve(payload, session)
+    account, card = await _validate_and_resolve(payload, current_user, session)
 
     data = payload.model_dump()
     data["currency"] = payload.currency or account.currency
-    transaction = Transaction(**data)
+    transaction = Transaction(**data, user_id=current_user.id)
     session.add(transaction)
     await session.flush()
 
@@ -128,20 +164,31 @@ async def create_transaction(
 
 @router.get("/{transaction_id}", response_model=TransactionRead)
 async def get_transaction(
-    transaction_id: int, session: AsyncSession = Depends(get_session)
+    transaction_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> Transaction:
-    return await _get_transaction_or_404(transaction_id, session)
+    return await _get_transaction_or_404(transaction_id, current_user, session)
 
 
 @router.patch("/{transaction_id}", response_model=TransactionRead)
 async def update_transaction(
-    transaction_id: int, payload: TransactionUpdate, session: AsyncSession = Depends(get_session)
+    transaction_id: int,
+    payload: TransactionUpdate,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> Transaction:
-    transaction = await _get_transaction_or_404(transaction_id, session)
+    transaction = await _get_transaction_or_404(transaction_id, current_user, session)
 
     updates = payload.model_dump(exclude_unset=True)
     if "category_id" in updates and updates["category_id"] is not None:
-        category = await session.get(Category, updates["category_id"])
+        category = (
+            await session.execute(
+                select(Category).where(
+                    Category.id == updates["category_id"], Category.user_id == current_user.id
+                )
+            )
+        ).scalar_one_or_none()
         if category is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Categoría no encontrada"
@@ -161,12 +208,14 @@ async def update_transaction(
 
 @router.delete("/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_transaction(
-    transaction_id: int, session: AsyncSession = Depends(get_session)
+    transaction_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> None:
     """Revierte el efecto sobre el saldo antes de borrar. Los movimientos que registran una
     compra en cuotas (`installment_plan_id` no nulo) no se pueden borrar directamente -- hay
     que borrar el plan de cuotas (`DELETE /installment-plans/{id}`), que se encarga de todo."""
-    transaction = await _get_transaction_or_404(transaction_id, session)
+    transaction = await _get_transaction_or_404(transaction_id, current_user, session)
     if transaction.installment_plan_id is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

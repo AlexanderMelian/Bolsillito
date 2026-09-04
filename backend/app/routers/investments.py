@@ -7,11 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_session
-from app.models import Account, Asset, InvestmentTransaction, InvestmentTxType, Transaction, TransactionType
+from app.models import (
+    Account, Asset, InvestmentTransaction, InvestmentTxType, Transaction, TransactionType, User,
+)
+from app.schemas.dashboard import UnconvertedAmount
 from app.schemas.investments import (
     AssetPosition, InvestmentTransactionCreate, InvestmentTransactionRead, Portfolio,
 )
-from app.schemas.dashboard import UnconvertedAmount
+from app.services.auth import get_current_user
 from app.services.balances import apply_transaction_balance_effect
 from app.services.exchange_rates import convert
 from app.services.investments import compute_position, get_current_quantity, list_assets_with_activity
@@ -20,9 +23,16 @@ router = APIRouter(tags=["investments"])
 
 
 async def _get_investment_transaction_or_404(
-    transaction_id: int, session: AsyncSession
+    transaction_id: int, user: User, session: AsyncSession
 ) -> InvestmentTransaction:
-    transaction = await session.get(InvestmentTransaction, transaction_id)
+    transaction = (
+        await session.execute(
+            select(InvestmentTransaction).where(
+                InvestmentTransaction.id == transaction_id,
+                InvestmentTransaction.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
     if transaction is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Transacción de inversión no encontrada"
@@ -45,15 +55,27 @@ def _cash_effect(payload: InvestmentTransactionCreate) -> tuple[TransactionType,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_investment_transaction(
-    payload: InvestmentTransactionCreate, session: AsyncSession = Depends(get_session)
+    payload: InvestmentTransactionCreate,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> InvestmentTransaction:
-    asset = await session.get(Asset, payload.asset_id)
+    asset = (
+        await session.execute(
+            select(Asset).where(Asset.id == payload.asset_id, Asset.user_id == current_user.id)
+        )
+    ).scalar_one_or_none()
     if asset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Activo no encontrado")
 
     account: Account | None = None
     if payload.account_id is not None:
-        account = await session.get(Account, payload.account_id)
+        account = (
+            await session.execute(
+                select(Account).where(
+                    Account.id == payload.account_id, Account.user_id == current_user.id
+                )
+            )
+        ).scalar_one_or_none()
         if account is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Cuenta no encontrada"
@@ -65,14 +87,14 @@ async def create_investment_transaction(
             )
 
     if payload.type == InvestmentTxType.SELL:
-        current_quantity = await get_current_quantity(session, payload.asset_id)
+        current_quantity = await get_current_quantity(session, current_user.id, payload.asset_id)
         if payload.quantity > current_quantity:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"No se pueden vender {payload.quantity} unidades: la posición actual es {current_quantity}",
             )
 
-    investment_transaction = InvestmentTransaction(**payload.model_dump())
+    investment_transaction = InvestmentTransaction(**payload.model_dump(), user_id=current_user.id)
     session.add(investment_transaction)
     await session.flush()
 
@@ -84,6 +106,7 @@ async def create_investment_transaction(
                 detail="El monto neto de la operación tiene que ser mayor a 0 (revisá el fee)",
             )
         cash_transaction = Transaction(
+            user_id=current_user.id,
             type=cash_type,
             account_id=account.id,
             amount=cash_amount,
@@ -105,10 +128,13 @@ async def create_investment_transaction(
 async def list_investment_transactions(
     asset_id: int | None = None,
     account_id: int | None = None,
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[InvestmentTransaction]:
-    stmt = select(InvestmentTransaction).order_by(
-        InvestmentTransaction.date.desc(), InvestmentTransaction.id.desc()
+    stmt = (
+        select(InvestmentTransaction)
+        .where(InvestmentTransaction.user_id == current_user.id)
+        .order_by(InvestmentTransaction.date.desc(), InvestmentTransaction.id.desc())
     )
     if asset_id is not None:
         stmt = stmt.where(InvestmentTransaction.asset_id == asset_id)
@@ -119,22 +145,31 @@ async def list_investment_transactions(
 
 @router.get("/investment-transactions/{transaction_id}", response_model=InvestmentTransactionRead)
 async def get_investment_transaction(
-    transaction_id: int, session: AsyncSession = Depends(get_session)
+    transaction_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> InvestmentTransaction:
-    return await _get_investment_transaction_or_404(transaction_id, session)
+    return await _get_investment_transaction_or_404(transaction_id, current_user, session)
 
 
 @router.delete("/investment-transactions/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_investment_transaction(
-    transaction_id: int, session: AsyncSession = Depends(get_session)
+    transaction_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> None:
     """Revierte el efecto sobre el saldo (si esta transacción tenía una cuenta asociada) y
     valida que borrarla no deje la posición en negativo (ej. borrar una compra de la que ya se
     vendió parte)."""
-    investment_transaction = await _get_investment_transaction_or_404(transaction_id, session)
+    investment_transaction = await _get_investment_transaction_or_404(
+        transaction_id, current_user, session
+    )
 
     remaining_quantity = await get_current_quantity(
-        session, investment_transaction.asset_id, exclude_transaction_id=transaction_id
+        session,
+        current_user.id,
+        investment_transaction.asset_id,
+        exclude_transaction_id=transaction_id,
     )
     if remaining_quantity < 0:
         raise HTTPException(
@@ -160,10 +195,12 @@ async def delete_investment_transaction(
 
 
 @router.get("/portfolio", response_model=Portfolio)
-async def get_portfolio(session: AsyncSession = Depends(get_session)) -> Portfolio:
+async def get_portfolio(
+    current_user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
+) -> Portfolio:
     reference_currency = get_settings().default_currency
     today = date_type.today()
-    assets = await list_assets_with_activity(session)
+    assets = await list_assets_with_activity(session, current_user.id)
 
     positions: list[AssetPosition] = []
     total_cost = Decimal("0.00")

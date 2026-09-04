@@ -6,17 +6,18 @@ from sqlalchemy import select
 from app.models import Account, AccountType, Card, CardType, Category, Transaction, TransactionType
 
 
-async def _account(db_session, **overrides) -> Account:
-    defaults = {"name": "Cuenta", "type": AccountType.BANK, "currency": "ARS"}
+async def _account(db_session, user_id: int, **overrides) -> Account:
+    defaults = {"name": "Cuenta", "type": AccountType.BANK, "currency": "ARS", "user_id": user_id}
     account = Account(**{**defaults, **overrides})
     db_session.add(account)
     await db_session.commit()
     return account
 
 
-async def _credit_card(db_session, account: Account, **overrides) -> Card:
+async def _credit_card(db_session, account: Account, user_id: int, **overrides) -> Card:
     defaults = {
         "account_id": account.id,
+        "user_id": user_id,
         "name": "Visa",
         "type": CardType.CREDIT,
         "closing_day": 15,
@@ -28,9 +29,9 @@ async def _credit_card(db_session, account: Account, **overrides) -> Card:
     return card
 
 
-async def test_create_installment_plan_generates_items_and_statements(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+async def test_create_installment_plan_generates_items_and_statements(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
 
     response = await client.post(
         "/api/v1/installment-plans",
@@ -52,10 +53,10 @@ async def test_create_installment_plan_generates_items_and_statements(client, db
 
 
 async def test_create_installment_plan_purchase_before_closing_day_belongs_to_current_cycle(
-    client, db_session
+    client, db_session, user
 ):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
 
     response = await client.post(
         "/api/v1/installment-plans",
@@ -74,9 +75,9 @@ async def test_create_installment_plan_purchase_before_closing_day_belongs_to_cu
     assert matching["closing_date"] == "2026-03-15"
 
 
-async def test_create_installment_plan_does_not_change_account_balance(client, db_session):
-    account = await _account(db_session, balance=Decimal("1000.00"))
-    card = await _credit_card(db_session, account)
+async def test_create_installment_plan_does_not_change_account_balance(client, db_session, user):
+    account = await _account(db_session, user.id, balance=Decimal("1000.00"))
+    card = await _credit_card(db_session, account, user.id)
 
     await client.post(
         "/api/v1/installment-plans",
@@ -93,9 +94,9 @@ async def test_create_installment_plan_does_not_change_account_balance(client, d
     assert account.balance == Decimal("1000.00")
 
 
-async def test_create_installment_plan_creates_a_history_transaction(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+async def test_create_installment_plan_creates_a_history_transaction(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
 
     response = await client.post(
         "/api/v1/installment-plans",
@@ -133,9 +134,9 @@ async def test_create_installment_plan_card_not_found(client):
     assert response.status_code == 404
 
 
-async def test_create_installment_plan_category_not_found(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+async def test_create_installment_plan_category_not_found(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
 
     response = await client.post(
         "/api/v1/installment-plans",
@@ -151,9 +152,9 @@ async def test_create_installment_plan_category_not_found(client, db_session):
     assert response.status_code == 404
 
 
-async def test_create_installment_plan_rejects_zero_installments(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+async def test_create_installment_plan_rejects_zero_installments(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
 
     response = await client.post(
         "/api/v1/installment-plans",
@@ -168,9 +169,9 @@ async def test_create_installment_plan_rejects_zero_installments(client, db_sess
     assert response.status_code == 422
 
 
-async def test_create_installment_plan_rejects_debit_card(client, db_session):
-    account = await _account(db_session)
-    card = Card(account_id=account.id, name="Débito", type=CardType.DEBIT)
+async def test_create_installment_plan_rejects_debit_card(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = Card(account_id=account.id, name="Débito", type=CardType.DEBIT, user_id=user.id)
     db_session.add(card)
     await db_session.commit()
 
@@ -187,10 +188,10 @@ async def test_create_installment_plan_rejects_debit_card(client, db_session):
     assert response.status_code == 422
 
 
-async def test_create_installment_plan_rejects_non_expense_category(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
-    category = Category(name="Sueldo", kind=TransactionType.INCOME)
+async def test_create_installment_plan_rejects_non_expense_category(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
+    category = Category(name="Sueldo", kind=TransactionType.INCOME, user_id=user.id)
     db_session.add(category)
     await db_session.commit()
 
@@ -208,9 +209,9 @@ async def test_create_installment_plan_rejects_non_expense_category(client, db_s
     assert response.status_code == 422
 
 
-async def test_create_installment_plan_rejects_non_positive_amount(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+async def test_create_installment_plan_rejects_non_positive_amount(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
 
     response = await client.post(
         "/api/v1/installment-plans",
@@ -225,9 +226,9 @@ async def test_create_installment_plan_rejects_non_positive_amount(client, db_se
     assert response.status_code == 422
 
 
-async def test_get_installment_plan(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+async def test_get_installment_plan(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
     create_response = await client.post(
         "/api/v1/installment-plans",
         json={
@@ -250,9 +251,9 @@ async def test_get_installment_plan_404_when_missing(client):
     assert response.status_code == 404
 
 
-async def test_delete_installment_plan_removes_items_and_history_transaction(client, db_session):
-    account = await _account(db_session)
-    card = await _credit_card(db_session, account)
+async def test_delete_installment_plan_removes_items_and_history_transaction(client, db_session, user):
+    account = await _account(db_session, user.id)
+    card = await _credit_card(db_session, account, user.id)
     create_response = await client.post(
         "/api/v1/installment-plans",
         json={

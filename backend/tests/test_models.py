@@ -20,17 +20,18 @@ from app.models import (
 )
 
 
-async def _make_account(db_session, **overrides) -> Account:
-    defaults = {"name": "Cuenta", "type": AccountType.BANK, "currency": "ARS"}
+async def _make_account(db_session, user_id: int, **overrides) -> Account:
+    defaults = {"name": "Cuenta", "type": AccountType.BANK, "currency": "ARS", "user_id": user_id}
     account = Account(**{**defaults, **overrides})
     db_session.add(account)
     await db_session.flush()
     return account
 
 
-async def _make_credit_card(db_session, account: Account, **overrides) -> Card:
+async def _make_credit_card(db_session, account: Account, user_id: int, **overrides) -> Card:
     card = Card(
         account_id=account.id,
+        user_id=user_id,
         name="Visa",
         type=CardType.CREDIT,
         closing_day=15,
@@ -45,12 +46,12 @@ async def _make_credit_card(db_session, account: Account, **overrides) -> Card:
 # --- Enums --------------------------------------------------------------------------------
 
 
-async def test_enum_persists_value_not_name(db_session):
+async def test_enum_persists_value_not_name(db_session, user):
     """Regresión del bug de Fase 1: sin `pg_enum(values_callable=...)`, SQLAlchemy persiste
     el `.name` del enum ("DEBIT") en vez del `.value` ("debit"), lo que rompe cualquier
     CheckConstraint en SQL crudo que compare contra el valor en minúscula."""
-    account = await _make_account(db_session)
-    card = Card(account_id=account.id, name="Débito", type=CardType.DEBIT)
+    account = await _make_account(db_session, user.id)
+    card = Card(account_id=account.id, user_id=user.id, name="Débito", type=CardType.DEBIT)
     db_session.add(card)
     await db_session.commit()
 
@@ -62,25 +63,26 @@ async def test_enum_persists_value_not_name(db_session):
 # --- Cards: reglas de tarjetas de crédito --------------------------------------------------
 
 
-async def test_credit_card_requires_closing_and_payment_day(db_session):
-    account = await _make_account(db_session)
-    db_session.add(Card(account_id=account.id, name="Visa", type=CardType.CREDIT))
+async def test_credit_card_requires_closing_and_payment_day(db_session, user):
+    account = await _make_account(db_session, user.id)
+    db_session.add(Card(account_id=account.id, user_id=user.id, name="Visa", type=CardType.CREDIT))
     with pytest.raises(IntegrityError):
         await db_session.commit()
 
 
-async def test_debit_card_does_not_require_cycle_days(db_session):
-    account = await _make_account(db_session)
-    db_session.add(Card(account_id=account.id, name="Débito", type=CardType.DEBIT))
+async def test_debit_card_does_not_require_cycle_days(db_session, user):
+    account = await _make_account(db_session, user.id)
+    db_session.add(Card(account_id=account.id, user_id=user.id, name="Débito", type=CardType.DEBIT))
     await db_session.commit()  # no debe lanzar
 
 
 @pytest.mark.parametrize("closing_day", [0, 32])
-async def test_card_closing_day_out_of_range(db_session, closing_day):
-    account = await _make_account(db_session)
+async def test_card_closing_day_out_of_range(db_session, user, closing_day):
+    account = await _make_account(db_session, user.id)
     db_session.add(
         Card(
             account_id=account.id,
+            user_id=user.id,
             name="Visa",
             type=CardType.CREDIT,
             closing_day=closing_day,
@@ -91,9 +93,9 @@ async def test_card_closing_day_out_of_range(db_session, closing_day):
         await db_session.commit()
 
 
-async def test_card_cascade_deletes_when_account_is_deleted(db_session):
-    account = await _make_account(db_session)
-    card = await _make_credit_card(db_session, account)
+async def test_card_cascade_deletes_when_account_is_deleted(db_session, user):
+    account = await _make_account(db_session, user.id)
+    card = await _make_credit_card(db_session, account, user.id)
     await db_session.commit()
 
     await db_session.delete(account)
@@ -108,10 +110,11 @@ async def test_card_cascade_deletes_when_account_is_deleted(db_session):
 # --- Transactions: montos y transferencias --------------------------------------------------
 
 
-async def test_transaction_amount_must_be_positive(db_session):
-    account = await _make_account(db_session)
+async def test_transaction_amount_must_be_positive(db_session, user):
+    account = await _make_account(db_session, user.id)
     db_session.add(
         Transaction(
+            user_id=user.id,
             type=TransactionType.EXPENSE,
             account_id=account.id,
             amount=Decimal("-10.00"),
@@ -122,10 +125,11 @@ async def test_transaction_amount_must_be_positive(db_session):
         await db_session.commit()
 
 
-async def test_transfer_requires_a_different_destination_account(db_session):
-    account = await _make_account(db_session)
+async def test_transfer_requires_a_different_destination_account(db_session, user):
+    account = await _make_account(db_session, user.id)
     db_session.add(
         Transaction(
+            user_id=user.id,
             type=TransactionType.TRANSFER,
             account_id=account.id,
             destination_account_id=account.id,
@@ -137,11 +141,12 @@ async def test_transfer_requires_a_different_destination_account(db_session):
         await db_session.commit()
 
 
-async def test_transfer_between_two_distinct_accounts_is_valid(db_session):
-    origin = await _make_account(db_session, name="Origen")
-    destination = await _make_account(db_session, name="Destino")
+async def test_transfer_between_two_distinct_accounts_is_valid(db_session, user):
+    origin = await _make_account(db_session, user.id, name="Origen")
+    destination = await _make_account(db_session, user.id, name="Destino")
     db_session.add(
         Transaction(
+            user_id=user.id,
             type=TransactionType.TRANSFER,
             account_id=origin.id,
             destination_account_id=destination.id,
@@ -155,11 +160,12 @@ async def test_transfer_between_two_distinct_accounts_is_valid(db_session):
 # --- Installment plans / items ---------------------------------------------------------------
 
 
-async def test_installment_plan_requires_positive_installment_count(db_session):
-    account = await _make_account(db_session)
-    card = await _make_credit_card(db_session, account)
+async def test_installment_plan_requires_positive_installment_count(db_session, user):
+    account = await _make_account(db_session, user.id)
+    card = await _make_credit_card(db_session, account, user.id)
     db_session.add(
         InstallmentPlan(
+            user_id=user.id,
             card_id=card.id,
             description="Compra",
             purchase_date=date(2026, 3, 1),
@@ -171,10 +177,11 @@ async def test_installment_plan_requires_positive_installment_count(db_session):
         await db_session.commit()
 
 
-async def test_installment_item_number_unique_per_plan(db_session):
-    account = await _make_account(db_session)
-    card = await _make_credit_card(db_session, account)
+async def test_installment_item_number_unique_per_plan(db_session, user):
+    account = await _make_account(db_session, user.id)
+    card = await _make_credit_card(db_session, account, user.id)
     plan = InstallmentPlan(
+        user_id=user.id,
         card_id=card.id,
         description="Compra",
         purchase_date=date(2026, 3, 1),
@@ -192,10 +199,11 @@ async def test_installment_item_number_unique_per_plan(db_session):
         await db_session.commit()
 
 
-async def test_installment_item_cascade_deletes_when_plan_is_deleted(db_session):
-    account = await _make_account(db_session)
-    card = await _make_credit_card(db_session, account)
+async def test_installment_item_cascade_deletes_when_plan_is_deleted(db_session, user):
+    account = await _make_account(db_session, user.id)
+    card = await _make_credit_card(db_session, account, user.id)
     plan = InstallmentPlan(
+        user_id=user.id,
         card_id=card.id,
         description="Compra",
         purchase_date=date(2026, 3, 1),
@@ -220,17 +228,23 @@ async def test_installment_item_cascade_deletes_when_plan_is_deleted(db_session)
 # --- Card statements -----------------------------------------------------------------------
 
 
-async def test_card_statement_period_unique_per_card(db_session):
-    account = await _make_account(db_session)
-    card = await _make_credit_card(db_session, account)
+async def test_card_statement_period_unique_per_card(db_session, user):
+    account = await _make_account(db_session, user.id)
+    card = await _make_credit_card(db_session, account, user.id)
     closing = date(2026, 3, 15)
     db_session.add(
-        CardStatement(card_id=card.id, closing_date=closing, payment_due_date=date(2026, 3, 25))
+        CardStatement(
+            user_id=user.id, card_id=card.id, closing_date=closing,
+            payment_due_date=date(2026, 3, 25),
+        )
     )
     await db_session.commit()
 
     db_session.add(
-        CardStatement(card_id=card.id, closing_date=closing, payment_due_date=date(2026, 3, 25))
+        CardStatement(
+            user_id=user.id, card_id=card.id, closing_date=closing,
+            payment_due_date=date(2026, 3, 25),
+        )
     )
     with pytest.raises(IntegrityError):
         await db_session.commit()
@@ -239,25 +253,34 @@ async def test_card_statement_period_unique_per_card(db_session):
 # --- Categories ------------------------------------------------------------------------------
 
 
-async def test_category_name_must_be_unique(db_session):
-    db_session.add(Category(name="Comida", kind=TransactionType.EXPENSE))
+async def test_category_name_must_be_unique_per_user(db_session, user):
+    db_session.add(Category(user_id=user.id, name="Comida", kind=TransactionType.EXPENSE))
     await db_session.commit()
 
-    db_session.add(Category(name="Comida", kind=TransactionType.EXPENSE))
+    db_session.add(Category(user_id=user.id, name="Comida", kind=TransactionType.EXPENSE))
     with pytest.raises(IntegrityError):
         await db_session.commit()
+
+
+async def test_category_name_can_repeat_across_different_users(db_session, user, other_user):
+    db_session.add(Category(user_id=user.id, name="Comida", kind=TransactionType.EXPENSE))
+    await db_session.commit()
+
+    db_session.add(Category(user_id=other_user.id, name="Comida", kind=TransactionType.EXPENSE))
+    await db_session.commit()  # no debe lanzar -- la unicidad es por (user_id, name)
 
 
 # --- Investments -----------------------------------------------------------------------------
 
 
-async def test_investment_transaction_quantity_must_be_positive(db_session):
-    asset = Asset(ticker="AAPL", name="Apple", type=AssetType.STOCK, currency="USD")
+async def test_investment_transaction_quantity_must_be_positive(db_session, user):
+    asset = Asset(user_id=user.id, ticker="AAPL", name="Apple", type=AssetType.STOCK, currency="USD")
     db_session.add(asset)
     await db_session.flush()
 
     db_session.add(
         InvestmentTransaction(
+            user_id=user.id,
             asset_id=asset.id,
             type=InvestmentTxType.BUY,
             quantity=Decimal("0"),
@@ -269,11 +292,18 @@ async def test_investment_transaction_quantity_must_be_positive(db_session):
         await db_session.commit()
 
 
-async def test_asset_ticker_unique_per_type(db_session):
-    db_session.add(Asset(ticker="AAPL", name="Apple", type=AssetType.STOCK, currency="USD"))
+async def test_asset_ticker_unique_per_type_and_user(db_session, user):
+    db_session.add(
+        Asset(user_id=user.id, ticker="AAPL", name="Apple", type=AssetType.STOCK, currency="USD")
+    )
     await db_session.commit()
 
-    db_session.add(Asset(ticker="AAPL", name="Apple duplicado", type=AssetType.STOCK, currency="USD"))
+    db_session.add(
+        Asset(
+            user_id=user.id, ticker="AAPL", name="Apple duplicado", type=AssetType.STOCK,
+            currency="USD",
+        )
+    )
     with pytest.raises(IntegrityError):
         await db_session.commit()
 
