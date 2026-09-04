@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from app.billing_cycle import (
+from app.services.billing_cycle import (
     build_installment_amounts,
     build_installment_closing_dates,
     get_payment_due_date,

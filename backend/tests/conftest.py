@@ -12,8 +12,11 @@ aunque el código bajo prueba haga su propio `session.commit()`.
 import os
 
 import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app.database import get_session
+from app.main import app
 from app.models import Base
 
 TEST_DATABASE_URL = os.environ.get(
@@ -46,3 +49,18 @@ async def db_session(engine):
         await session.close()
         await trans.rollback()
         await connection.close()
+
+
+@pytest_asyncio.fixture
+async def client(db_session):
+    """Cliente HTTP contra la app FastAPI real, pero con `get_session` overrideado para usar
+    la misma `db_session` (y por lo tanto el mismo SAVEPOINT aislado) del test."""
+
+    async def override_get_session():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+    app.dependency_overrides.clear()

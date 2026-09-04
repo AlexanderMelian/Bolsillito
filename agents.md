@@ -65,10 +65,16 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
   nunca sesiones síncronas.
 - Montos monetarios: siempre `Decimal` + `NUMERIC(12,2)` en DB. **Nunca `float` para dinero.**
   Cantidades/precios de inversión: `NUMERIC(20,8)`.
-- Estructura modular: separar `models/` (SQLAlchemy), `schemas/` (Pydantic), `routers/`
-  (endpoints), `services/` (lógica de negocio, ej. cálculo de ciclos de facturación).
-- La lógica de ciclos de facturación y cuotas vive en `services/billing_cycle.py` — no debe
+- Estructura modular: `app/models.py` (SQLAlchemy, un solo archivo por ahora), `app/schemas/`
+  (Pydantic, un archivo por recurso: `accounts.py`, `cards.py`, ...), `app/routers/` (un
+  archivo por recurso), `app/services/` (lógica de negocio, ej. `billing_cycle.py`).
+- La lógica de ciclos de facturación y cuotas vive en `app/services/billing_cycle.py` — no debe
   duplicarse en routers.
+- Errores: los `CheckConstraint`/`UniqueConstraint`/FK del modelo son la última línea de
+  defensa, pero cuando se pueden validar antes de tocar la DB (ej. tarjeta de crédito sin
+  `closing_day`/`payment_day`) se valida también en el schema Pydantic (`model_validator`) para
+  devolver 422 con un mensaje claro en vez de un 409 genérico. Ver `app/schemas/cards.py` y el
+  handler global de `IntegrityError` → 409 en `app/main.py`.
 
 ### Frontend (React / TypeScript / Tailwind)
 - Componentes funcionales + hooks. Sin clases.
@@ -79,6 +85,19 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
 - Estado de servidor con **TanStack Query**; estado de UI local con **Zustand**. No mezclar
   ambos.
 - Preferencia estética: interfaz limpia, minimalista, tonos oscuros/mate.
+- Estructura: `lib/api/<recurso>.ts` (fetch + hooks de React Query por recurso, mirror del
+  router del backend), `features/<recurso>/` (componentes), `stores/uiStore.ts` (qué modal está
+  abierto y, si aplica, qué entidad se está editando).
+- Formularios de alta/edición en el mismo Dialog: si el form necesita resetear su estado según
+  qué se está editando, remontarlo con `key={entity?.id ?? 'new'}` e inicializar el `useState`
+  directo desde la prop, en vez de un `useEffect` que sincronice manualmente (ver
+  `features/accounts/AccountFormDialog.tsx`) — evita el render extra y el warning de oxlint
+  `set-state-in-effect`.
+- Tests de componentes: mockear `fetch` con `vi.stubGlobal` (no MSW, no hay uno instalado) y
+  envolver con `renderWithProviders` (`src/test-utils.tsx`, un `QueryClient` nuevo por test).
+  Los componentes que usan el `Select` de shadcn (Radix) necesitan los polyfills de
+  `hasPointerCapture`/`scrollIntoView` ya cargados en `src/setupTests.ts` — si un test nuevo
+  interactúa con un `Select` y jsdom tira un error de puntero, es por esto.
 
 ---
 
@@ -87,7 +106,7 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
 - [x] **Fase 0: Documentación estratégica** (arquitectura, API spec, modelo de datos, guía de
       estilo, plan de pruebas).
 - [x] **Fase 1: Configuración inicial** (entornos, Docker Compose, Alembic, Git).
-- [ ] **Fase 2 — Módulo 1: Cuentas y Tarjetas** (CRUD + validación de ciclos de facturación).
+- [x] **Fase 2 — Módulo 1: Cuentas y Tarjetas** (CRUD + validación de ciclos de facturación).
 - [ ] **Fase 2 — Módulo 2: Transacciones y Cuotas** (movimientos, transferencias, cuotas).
 - [ ] **Fase 2 — Módulo 3: Dashboard y Reportes** (agregaciones, gráficos, flujo de caja
       proyectado).

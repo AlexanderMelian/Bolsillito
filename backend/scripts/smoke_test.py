@@ -10,7 +10,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.billing_cycle import build_installment_amounts, build_installment_closing_dates
+from app.services.billing_cycle import build_installment_amounts, build_installment_closing_dates
 from app.database import async_session_factory
 from app.models import (
     Account, AccountType, Card, CardStatement, CardType, InstallmentItem,
