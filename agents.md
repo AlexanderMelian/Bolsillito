@@ -55,8 +55,7 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
 
 ### CI (GitHub Actions)
 `.github/workflows/ci.yml`, jobs `backend`/`frontend` en paralelo por push/PR contra `master` y
-`develop` (el remoto usa `master`, no `main` — el local `main` trackea `origin/master`, ver
-`git remote -v`) — detalle de cada paso en `docs/testing-plan.md` § CI. El job de backend usa un
+`develop` — detalle de cada paso en `docs/testing-plan.md` § CI. El job de backend usa un
 servicio `postgres:16` con `POSTGRES_DB=bolsillito_test` directo (una sola base, sin Alembic:
 `conftest.py` crea las tablas desde `Base.metadata`), así que simula el entorno de test más
 fácil que replicar el setup completo de dev con dos bases.

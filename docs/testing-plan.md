@@ -106,8 +106,7 @@ instrumenta cuando un test lo importa indirectamente, y no vale la pena persegui
 ## CI (GitHub Actions)
 
 `.github/workflows/ci.yml`, dos jobs en paralelo, disparados en push/PR contra `master` y
-`develop` (rama por defecto del remoto -- ver `git remote -v`; el local `main` trackea
-`origin/master`):
+`develop`:
 - **`backend`**: levanta un servicio `postgres:16` con `POSTGRES_DB=bolsillito_test` (una sola
   base, ya lista para los tests -- a diferencia del entorno local no hace falta el segundo
   `bolsillito_test` separado de la base de dev, ni correr Alembic: `conftest.py` crea las
