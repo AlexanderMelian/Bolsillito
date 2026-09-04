@@ -3,8 +3,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
-from app.models import Card
+from app.models import Card, CardStatement
+from app.schemas.card_statements import CardStatementRead, StatementPaymentCreate
 from app.schemas.cards import CardCreate, CardRead, CardUpdate, _validate_credit_card_cycle
+from app.services.card_statements import compute_statement_totals, pay_statement
 
 router = APIRouter(prefix="/cards", tags=["cards"])
 
@@ -70,3 +72,57 @@ async def delete_card(card_id: int, session: AsyncSession = Depends(get_session)
     card = await _get_card_or_404(card_id, session)
     await session.delete(card)
     await session.commit()
+
+
+async def _statement_read(session: AsyncSession, statement: CardStatement) -> CardStatementRead:
+    total_amount, status_ = await compute_statement_totals(session, statement)
+    return CardStatementRead(
+        id=statement.id,
+        card_id=statement.card_id,
+        closing_date=statement.closing_date,
+        payment_due_date=statement.payment_due_date,
+        status=status_,
+        total_amount=total_amount,
+        payment_transaction_id=statement.payment_transaction_id,
+    )
+
+
+@router.get("/{card_id}/statements", response_model=list[CardStatementRead])
+async def list_card_statements(
+    card_id: int, session: AsyncSession = Depends(get_session)
+) -> list[CardStatementRead]:
+    await _get_card_or_404(card_id, session)
+    statements = (
+        await session.execute(
+            select(CardStatement)
+            .where(CardStatement.card_id == card_id)
+            .order_by(CardStatement.closing_date)
+        )
+    ).scalars().all()
+    return [await _statement_read(session, statement) for statement in statements]
+
+
+@router.post("/{card_id}/statements/{statement_id}/pay", response_model=CardStatementRead)
+async def pay_card_statement(
+    card_id: int,
+    statement_id: int,
+    payload: StatementPaymentCreate,
+    session: AsyncSession = Depends(get_session),
+) -> CardStatementRead:
+    card = await _get_card_or_404(card_id, session)
+    statement = await session.get(CardStatement, statement_id)
+    if statement is None or statement.card_id != card_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resumen no encontrado")
+    if statement.payment_transaction_id is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Este resumen ya está pagado")
+
+    total_amount, _ = await compute_statement_totals(session, statement)
+    if total_amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="El resumen no tiene saldo pendiente"
+        )
+
+    await pay_statement(session, card, statement, payload.payment_date)
+    await session.commit()
+    await session.refresh(statement)
+    return await _statement_read(session, statement)

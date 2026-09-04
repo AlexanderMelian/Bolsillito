@@ -75,6 +75,25 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
   `closing_day`/`payment_day`) se valida también en el schema Pydantic (`model_validator`) para
   devolver 422 con un mensaje claro en vez de un 409 genérico. Ver `app/schemas/cards.py` y el
   handler global de `IntegrityError` → 409 en `app/main.py`.
+- **Bug de Python 3.14 a tener en cuenta:** un campo Pydantic llamado igual que su tipo (ej.
+  `date: date`, sobre todo en su forma `date: date | None`) puede romper en runtime con
+  `TypeError: unsupported operand type(s) for |: 'NoneType' and 'NoneType'` -- la nueva
+  resolución diferida de anotaciones de 3.14 (`annotationlib`, PEP 649) a veces resuelve el
+  nombre del tipo contra el propio atributo de la clase en vez del import del módulo. Se
+  soluciona aliaseando el import (`from datetime import date as date_type`) y usándolo en la
+  anotación, dejando el nombre del campo como `date` (ver `app/schemas/transactions.py`). Mismo
+  cuidado con cualquier otro campo cuyo nombre coincida exactamente con su tipo.
+- El saldo de una cuenta se ajusta con SQL atómico (`balance = balance + delta`,
+  `services/balances.py`), nunca leyendo y reescribiendo en Python. Un gasto con tarjeta de
+  crédito no toca el saldo (se ignora en `apply_transaction_balance_effect`); afecta recién al
+  pagar el resumen (`services/card_statements.pay_statement`).
+- Cualquier gasto con `card_id` de una tarjeta de crédito -- sea de pago único vía
+  `POST /transactions` o una compra en cuotas vía `POST /installment-plans` -- necesita un
+  `CardStatement` para su ciclo (`get_or_create_statement`). Nos olvidamos de esto para los
+  gastos de pago único al escribir el módulo de transacciones: sin esa llamada, un gasto único a
+  crédito nunca aparecía en `GET /cards/{id}/statements` ni se podía pagar. Si se agrega un nuevo
+  punto de entrada que cree una `Transaction` con `card_id` de una tarjeta de crédito, hay que
+  acordarse de esto.
 
 ### Frontend (React / TypeScript / Tailwind)
 - Componentes funcionales + hooks. Sin clases.
@@ -107,7 +126,7 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
       estilo, plan de pruebas).
 - [x] **Fase 1: Configuración inicial** (entornos, Docker Compose, Alembic, Git).
 - [x] **Fase 2 — Módulo 1: Cuentas y Tarjetas** (CRUD + validación de ciclos de facturación).
-- [ ] **Fase 2 — Módulo 2: Transacciones y Cuotas** (movimientos, transferencias, cuotas).
+- [x] **Fase 2 — Módulo 2: Transacciones y Cuotas** (movimientos, transferencias, cuotas).
 - [ ] **Fase 2 — Módulo 3: Dashboard y Reportes** (agregaciones, gráficos, flujo de caja
       proyectado).
 - [ ] **Fase 2 — Módulo 4: Inversiones** (portafolio, precio promedio ponderado).
@@ -124,3 +143,11 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
    explícitamente.
 5. Soporte multi-moneda desde el día uno (`currency` por cuenta/activo + tabla
    `exchange_rates` cargada manualmente).
+6. Simplificación deliberada (Módulo 2): una transferencia solo puede ser entre cuentas de la
+   misma moneda (422 si no coinciden) -- no hay conversión de moneda en la transferencia misma.
+   Para "comprar dólares" el usuario registra dos movimientos separados (gasto en la cuenta ARS
+   + ingreso en la cuenta USD). Si se pide soporte real de transferencias multi-moneda, hay que
+   sumar un campo de monto en la moneda de destino y una tasa de cambio aplicada.
+7. Simplificación deliberada (Módulo 2): `card_id` en una `Transaction` solo es válido con
+   `type=expense` -- no se modela un reintegro/nota de crédito a la tarjeta. Si se necesita, hay
+   que revisar `services/card_statements.compute_statement_totals` (hoy solo suma gastos).

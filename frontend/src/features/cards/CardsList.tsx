@@ -7,6 +7,7 @@ export function CardsList() {
   const { data: cards, isLoading, isError } = useCards()
   const deleteCard = useDeleteCard()
   const openCardModal = useUiStore((state) => state.openCardModal)
+  const openStatements = useUiStore((state) => state.openStatements)
 
   return (
     <section className="space-y-3">
@@ -42,14 +43,21 @@ export function CardsList() {
                 )}
               </div>
             </div>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label={`Eliminar ${card.name}`}
-              onClick={() => deleteCard.mutate(card.id)}
-            >
-              ×
-            </Button>
+            <div className="flex items-center gap-1">
+              {card.type === 'credit' && (
+                <Button size="sm" variant="outline" onClick={() => openStatements(card)}>
+                  Resúmenes
+                </Button>
+              )}
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label={`Eliminar ${card.name}`}
+                onClick={() => deleteCard.mutate(card.id)}
+              >
+                ×
+              </Button>
+            </div>
           </li>
         ))}
       </ul>

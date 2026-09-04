@@ -5,8 +5,9 @@ import type { Account, AccountCreateInput, AccountUpdateInput } from '@/lib/api/
 
 const accountsKey = ['accounts'] as const
 
-export function listAccounts(): Promise<Account[]> {
-  return apiRequest<Account[]>('/api/v1/accounts')
+export function listAccounts(options: { includeArchived?: boolean } = {}): Promise<Account[]> {
+  const query = options.includeArchived ? '?include_archived=true' : ''
+  return apiRequest<Account[]>(`/api/v1/accounts${query}`)
 }
 
 export function createAccount(input: AccountCreateInput): Promise<Account> {
@@ -27,8 +28,11 @@ export function deleteAccount(id: number): Promise<Account> {
   return apiRequest<Account>(`/api/v1/accounts/${id}`, { method: 'DELETE' })
 }
 
-export function useAccounts() {
-  return useQuery({ queryKey: accountsKey, queryFn: listAccounts })
+export function useAccounts(options: { includeArchived?: boolean } = {}) {
+  return useQuery({
+    queryKey: [...accountsKey, options.includeArchived ?? false],
+    queryFn: () => listAccounts(options),
+  })
 }
 
 export function useCreateAccount() {

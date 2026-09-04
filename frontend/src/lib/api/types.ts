@@ -1,5 +1,7 @@
 export type AccountType = 'bank' | 'cash' | 'wallet' | 'investment'
 export type CardType = 'debit' | 'credit'
+export type TransactionType = 'income' | 'expense' | 'transfer'
+export type StatementStatus = 'open' | 'closed' | 'paid'
 
 export interface Account {
   id: number
@@ -43,4 +45,79 @@ export interface CardCreateInput {
   credit_limit?: string | null
   closing_day?: number | null
   payment_day?: number | null
+}
+
+export interface Category {
+  id: number
+  name: string
+  kind: TransactionType
+  icon: string | null
+}
+
+export interface CategoryCreateInput {
+  name: string
+  kind: TransactionType
+  icon?: string | null
+}
+
+export interface Transaction {
+  id: number
+  type: TransactionType
+  account_id: number
+  destination_account_id: number | null
+  card_id: number | null
+  category_id: number | null
+  installment_plan_id: number | null
+  amount: string
+  currency: string
+  date: string
+  description: string | null
+}
+
+export interface TransactionCreateInput {
+  type: TransactionType
+  account_id: number
+  destination_account_id?: number | null
+  card_id?: number | null
+  category_id?: number | null
+  amount: string
+  currency?: string
+  date: string
+  description?: string | null
+}
+
+export interface InstallmentItem {
+  number: number
+  amount: string
+  statement_id: number | null
+}
+
+export interface InstallmentPlan {
+  id: number
+  card_id: number
+  category_id: number | null
+  description: string
+  purchase_date: string
+  total_amount: string
+  total_installments: number
+  items: InstallmentItem[]
+}
+
+export interface InstallmentPlanCreateInput {
+  card_id: number
+  category_id?: number | null
+  description: string
+  purchase_date: string
+  total_amount: string
+  total_installments: number
+}
+
+export interface CardStatement {
+  id: number
+  card_id: number
+  closing_date: string
+  payment_due_date: string
+  status: StatementStatus
+  total_amount: string
+  payment_transaction_id: number | null
 }
