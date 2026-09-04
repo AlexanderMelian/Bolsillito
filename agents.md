@@ -53,6 +53,13 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
 - `make dev` — levanta backend + frontend en modo desarrollo
 - `make test` — corre pytest + vitest
 
+### CI (GitHub Actions)
+`.github/workflows/ci.yml`, jobs `backend`/`frontend` en paralelo por push/PR contra `main` y
+`develop` — detalle de cada paso en `docs/testing-plan.md` § CI. El job de backend usa un
+servicio `postgres:16` con `POSTGRES_DB=bolsillito_test` directo (una sola base, sin Alembic:
+`conftest.py` crea las tablas desde `Base.metadata`), así que simula el entorno de test más
+fácil que replicar el setup completo de dev con dos bases.
+
 ---
 
 ## 📐 Reglas de estilo y buenas prácticas
@@ -154,6 +161,20 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
   `ResponsiveContainer` de Recharts no mide nada en jsdom (no hay layout real), así que los
   tests de estos componentes no pueden verificar las barras SVG en sí -- se testean los
   estados de carga/error/vacío y que el título/mensaje correcto se muestre.
+- **Tema claro/oscuro**: `stores/themeStore.ts` (Zustand + `persist` en `localStorage`, clave
+  `bolsillito-theme`) agrega/saca la clase `.dark` de `<html>` -- el CSS de shadcn ya tenía los
+  tokens `.dark` definidos desde Fase 1, solo faltaba esto. `light`/`dark`/`system` se cicla con
+  `app/ThemeToggle.tsx` (ícono en el header). `index.html` tiene un script inline que aplica el
+  tema ANTES de que React monte (misma clave de storage) para no parpadear en claro un instante.
+  Si se cambia la clave de `persist`, hay que actualizar los dos lugares.
+- **Dos trampas de jsdom que aparecieron con el tema, ya resueltas en `setupTests.ts`:**
+  (1) `window.matchMedia` no existe en jsdom -- `themeStore.ts` lo llama en el nivel de módulo
+  (para escuchar cambios de preferencia del SO), así que sin el polyfill *cualquier* test que
+  importe `App` o `ThemeToggle` rompía al cargar el módulo, no al ejercitar el tema. (2) Node
+  22+ trae su propio `localStorage` global activo sin el flag `--localstorage-file`, con
+  `setItem`/`clear` rotos, y pisa el de jsdom -- se reemplaza por un mock en memoria. Un test que
+  dispara alguno de estos dos errores casi seguro está tocando el tema indirectamente (a través
+  de `App.test.tsx` u otro componente que renderice el header).
 
 ---
 
@@ -187,12 +208,6 @@ re-descubrirlo desde cero en la próxima sesión:
   `type=expense` (decisión #7). `compute_statement_totals` solo suma gastos.
 
 **Infraestructura**
-- **CI (GitHub Actions)**: planeado en Fase 0, nunca implementado — no existe
-  `.github/workflows/`. Ver el plan concreto (jobs, pasos) en `docs/testing-plan.md` § CI.
-  Mientras tanto la verificación es manual antes de cada commit.
-- **Tema oscuro**: los tokens `.dark` de shadcn están definidos en `index.css` pero nada agrega
-  esa clase al `<html>` — falta `next-themes` o un toggle manual para que la app respete la
-  preferencia del sistema u ofrezca un switch. Hoy siempre renderiza en claro.
 - **Bundle del frontend**: `npm run build` avisa que el chunk principal supera 500kB
   (Recharts pesa bastante). No es un problema todavía a esta escala, pero si crece más conviene
   code-splitting por ruta (`React.lazy` en `app/pages/`).

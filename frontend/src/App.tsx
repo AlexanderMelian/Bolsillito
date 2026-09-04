@@ -5,13 +5,17 @@ import { AccountsPage } from '@/app/pages/AccountsPage'
 import { DashboardPage } from '@/app/pages/DashboardPage'
 import { InvestmentsPage } from '@/app/pages/InvestmentsPage'
 import { TransactionsPage } from '@/app/pages/TransactionsPage'
+import { ThemeToggle } from '@/app/ThemeToggle'
 
 function App() {
   return (
     <div className="pb-16 sm:pb-0">
-      <header className="border-border border-b p-4 sm:p-6">
-        <h1 className="text-2xl font-semibold">Bolsillito</h1>
-        <p className="text-muted-foreground text-sm">Tus finanzas personales, sin planillas</p>
+      <header className="border-border flex items-start justify-between border-b p-4 sm:p-6">
+        <div>
+          <h1 className="text-2xl font-semibold">Bolsillito</h1>
+          <p className="text-muted-foreground text-sm">Tus finanzas personales, sin planillas</p>
+        </div>
+        <ThemeToggle />
       </header>
 
       <div className="sm:hidden">

@@ -4,7 +4,20 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <title>Bolsillito</title>
+    <script>
+      // Aplica el tema ANTES de que React monte, para no parpadear en claro un instante y
+      // recién después pasar a oscuro (mismo storage key que stores/themeStore.ts).
+      (function () {
+        try {
+          var stored = JSON.parse(localStorage.getItem('bolsillito-theme') || 'null')
+          var theme = (stored && stored.state && stored.state.theme) || 'system'
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+          var isDark = theme === 'dark' || (theme === 'system' && prefersDark)
+          document.documentElement.classList.toggle('dark', isDark)
+        } catch (e) {}
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

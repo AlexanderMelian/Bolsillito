@@ -105,11 +105,16 @@ instrumenta cuando un test lo importa indirectamente, y no vale la pena persegui
 
 ## CI (GitHub Actions)
 
-**No implementado todavía** — ver `agents.md` § Pendientes. El plan original:
-- Job `backend`: instala dependencias → levanta Postgres como servicio del workflow → `pytest`.
-- Job `frontend`: `npm ci` → `npm run lint` → `npm run test` → `npm run build`.
-- Ambos en cada PR contra `develop` y `main`.
+`.github/workflows/ci.yml`, dos jobs en paralelo, disparados en push/PR contra `main` y
+`develop`:
+- **`backend`**: levanta un servicio `postgres:16` con `POSTGRES_DB=bolsillito_test` (una sola
+  base, ya lista para los tests -- a diferencia del entorno local no hace falta el segundo
+  `bolsillito_test` separado de la base de dev, ni correr Alembic: `conftest.py` crea las
+  tablas directo desde `Base.metadata`), instala `requirements.txt` +
+  `requirements-dev.txt` con Python 3.14, corre `pytest` con `TEST_DATABASE_URL` apuntando a ese
+  servicio.
+- **`frontend`**: Node 22 (misma versión que `frontend/Dockerfile`), `npm ci` → `npm run lint` →
+  `npm run test` → `npm run build`.
 
-Hasta que se implemente, la verificación es manual: `docker compose up -d db` +
-`backend/venv/bin/pytest` + `cd frontend && npm run test && npm run build` antes de cada commit
-(así se viene haciendo en los Módulos 1–3).
+Verificado localmente simulando exactamente el servicio de CI (un contenedor Postgres nuevo con
+una sola base `bolsillito_test`, sin el resto del entorno de dev) antes de commitear el workflow.
