@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bolsillito
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: bolsillito
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bolsillito"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      target: prod
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://bolsillito:${POSTGRES_PASSWORD}@db:5432/bolsillito
+      CORS_ORIGINS: ${CORS_ORIGINS:-["https://bolsillito.example.com"]}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      target: prod
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-https://api.bolsillito.example.com}
+    ports:
+      - "4173:4173"
+    depends_on:
+      - backend
+
+volumes:
+  db_data:
