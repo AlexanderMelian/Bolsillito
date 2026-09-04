@@ -23,14 +23,23 @@ Ver `docs/architecture.md`, `docs/api-spec.md` y `db/schema.sql` para el diseño
   automáticamente, y sin eso un `downgrade` + `upgrade` posterior falla con
   `type "..." already exists` (nos pasó armando la migración inicial).
 - **Aplicar migraciones:** `alembic upgrade head` (desde `backend/`)
-- **Ejecutar tests:** `pytest` (desde `backend/`, usa `pytest.ini` -> `testpaths = tests`;
-  `scripts/` queda afuera a propósito porque `smoke_test.py` no es un test automatizado)
+- **Ejecutar tests:** `pytest` (desde `backend/`; corre con cobertura y falla si baja del 95%
+  — ver `pytest.ini`. Requiere la base `bolsillito_test` — la crea sola `docker compose up db`
+  en un volumen nuevo vía `db/init/`, pero si el volumen ya existía de antes hay que crearla a
+  mano una vez: `docker compose exec db psql -U bolsillito -d bolsillito -c "CREATE DATABASE
+  bolsillito_test;"`)
+- Si un modelo nuevo agrega una FK con `ondelete="CASCADE"`, la `relationship()` del lado "uno"
+  necesita `passive_deletes=True` (ver `Account.cards` en `app/models.py`) — si no, el ORM
+  intenta poner la FK en `NULL` antes de que Postgres borre en cascada, y falla contra una
+  columna `NOT NULL`. Agregar siempre un test que borre el padre y verifique que el hijo
+  desaparece.
 
 ### Frontend (React + Vite)
 - **Instalar dependencias:** `npm install` (desde `frontend/`)
 - **Ejecutar servidor de desarrollo:** `npm run dev` (desde `frontend/`)
 - **Compilar para producción:** `npm run build`
-- **Ejecutar tests:** `npm run test`
+- **Ejecutar tests:** `npm run test` (Vitest + Testing Library, con cobertura; gate en
+  `vitest.config.ts` — 80% líneas/statements/funcs, 70% branches)
 
 ### Docker
 - **Levantar entorno de desarrollo (hot-reload):** `docker compose up`

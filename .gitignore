@@ -4,12 +4,14 @@ backend/.env
 backend/__pycache__/
 backend/**/__pycache__/
 backend/.pytest_cache/
+backend/.coverage
 *.pyc
 
 # Frontend (Node)
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/coverage/
 
 # Docker / OS
 .DS_Store

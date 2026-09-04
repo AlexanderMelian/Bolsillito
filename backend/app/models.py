@@ -78,8 +78,11 @@ class Account(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
+    # passive_deletes=True: al borrar la cuenta, dejamos que Postgres borre las tarjetas vía
+    # el ON DELETE CASCADE de la FK (más abajo) en vez de que el ORM intente poner
+    # account_id=NULL primero (lo cual violaría la constraint NOT NULL de esa columna).
     cards: Mapped[list["Card"]] = relationship(
-        back_populates="account", foreign_keys="Card.account_id"
+        back_populates="account", foreign_keys="Card.account_id", passive_deletes=True
     )
 
 
@@ -176,8 +179,10 @@ class InstallmentPlan(Base):
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     total_installments: Mapped[int] = mapped_column()
 
+    # passive_deletes=True: mismo motivo que Account.cards -- delega el borrado en cascada al
+    # ON DELETE CASCADE de installment_items.plan_id en vez de que el ORM intente nullearla.
     items: Mapped[list["InstallmentItem"]] = relationship(
-        back_populates="plan", order_by="InstallmentItem.number"
+        back_populates="plan", order_by="InstallmentItem.number", passive_deletes=True
     )
 
     __table_args__ = (

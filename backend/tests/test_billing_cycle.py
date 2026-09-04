@@ -37,6 +37,10 @@ def test_payment_due_date_next_month_when_payment_day_before_closing_day():
     assert get_payment_due_date(date(2026, 3, 15), 5) == date(2026, 4, 5)
 
 
+def test_payment_due_date_crosses_year_boundary():
+    assert get_payment_due_date(date(2026, 12, 15), 5) == date(2027, 1, 5)
+
+
 def test_installment_closing_dates_cross_year_boundary():
     dates = build_installment_closing_dates(date(2026, 12, 20), CLOSING_DAY, 3)
     assert dates == [date(2027, 1, 15), date(2027, 2, 15), date(2027, 3, 15)]
