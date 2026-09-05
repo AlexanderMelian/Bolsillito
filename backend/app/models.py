@@ -89,6 +89,14 @@ class Account(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # Hora del evento en el dispositivo que lo originó, no de inserción en el servidor -- ver
+    # nota de "timestamp vs. created_at" en docs/architecture.md. Hoy siempre coincide con
+    # created_at (todo se crea online, vía este mismo servidor); cuando exista un cliente móvil
+    # offline-first, éste la setea con el reloj local al momento de la carga, y la sincronización
+    # ordena por esta columna para preservar el orden real en que el usuario cargó los datos.
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
 
     # passive_deletes=True: al borrar la cuenta, dejamos que Postgres borre las tarjetas vía
     # el ON DELETE CASCADE de la FK (más abajo) en vez de que el ORM intente poner
@@ -114,6 +122,10 @@ class Card(Base):
     credit_limit: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     closing_day: Mapped[int | None] = mapped_column(nullable=True)  # 1-31, solo crédito
     payment_day: Mapped[int | None] = mapped_column(nullable=True)  # 1-31, solo crédito
+    # Hora del evento en el dispositivo, no de inserción en el servidor -- ver Account.timestamp.
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
 
     account: Mapped["Account"] = relationship(
         back_populates="cards", foreign_keys=[account_id]
@@ -142,8 +154,48 @@ class Category(Base):
     name: Mapped[str] = mapped_column(String(50))
     icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
     kind: Mapped[TransactionType] = mapped_column(pg_enum(TransactionType, name="category_kind"))
+    # Hora del evento en el dispositivo, no de inserción en el servidor -- ver Account.timestamp.
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
 
     __table_args__ = (UniqueConstraint("user_id", "name", name="uq_category_user_name"),)
+
+
+class RecurringExpense(Base):
+    """Plantilla de un gasto fijo mensual (alquiler, internet, etc.). No tiene fecha de fin --
+    `services/recurring_expenses.py` genera una Transaction por cada período vencido cada vez
+    que se sincroniza (no hay scheduler/cron en esta app), y avanza `last_generated_on` para no
+    volver a generar (ni "resucitar" tras un borrado) un período ya cubierto."""
+
+    __tablename__ = "recurring_expenses"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    # Nullable a propósito: un gasto fijo puede cargarse sin cuenta para el usuario al que solo
+    # le importa el total de ingresos/egresos, sin llevar detalle de billetera/banco -- en ese
+    # caso no afecta ningún saldo (ver services/balances.py::apply_transaction_balance_effect).
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
+    description: Mapped[str] = mapped_column(String(255))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str] = mapped_column(String(3), default="ARS")
+    day_of_month: Mapped[int] = mapped_column()  # 1-31, recortado a fin de mes si no existe
+    start_date: Mapped[date] = mapped_column(Date)
+    last_generated_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    # Hora del evento en el dispositivo, no de inserción en el servidor -- ver Account.timestamp.
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+    __table_args__ = (
+        CheckConstraint("day_of_month BETWEEN 1 AND 31", name="ck_recurring_expense_day"),
+        CheckConstraint("amount > 0", name="ck_recurring_expense_amount_positive"),
+    )
 
 
 class Transaction(Base):
@@ -154,7 +206,9 @@ class Transaction(Base):
     type: Mapped[TransactionType] = mapped_column(
         pg_enum(TransactionType, name="transaction_type")
     )
-    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    # Nullable solo para instancias generadas por un RecurringExpense sin cuenta -- la carga
+    # manual (schemas.TransactionCreate) sigue exigiendo account_id, esto no cambia eso.
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
     destination_account_id: Mapped[int | None] = mapped_column(
         ForeignKey("accounts.id"), nullable=True
     )
@@ -166,12 +220,19 @@ class Transaction(Base):
     investment_transaction_id: Mapped[int | None] = mapped_column(
         ForeignKey("investment_transactions.id"), nullable=True
     )
+    recurring_expense_id: Mapped[int | None] = mapped_column(
+        ForeignKey("recurring_expenses.id", ondelete="SET NULL"), nullable=True
+    )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))  # siempre positivo; el signo lo da `type`
     currency: Mapped[str] = mapped_column(String(3), default="ARS")
     date: Mapped[date] = mapped_column(Date)
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+    # Hora del evento en el dispositivo, no de inserción en el servidor -- ver Account.timestamp.
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
     )
 
     __table_args__ = (
@@ -180,6 +241,11 @@ class Transaction(Base):
             "(type != 'transfer') OR "
             "(destination_account_id IS NOT NULL AND destination_account_id != account_id)",
             name="ck_transfer_needs_destination",
+        ),
+        # Múltiples NULL no chocan entre sí en Postgres -- no afecta transacciones normales
+        # (recurring_expense_id IS NULL), solo evita generar dos veces el mismo período.
+        UniqueConstraint(
+            "recurring_expense_id", "date", name="uq_recurring_expense_period"
         ),
         Index("ix_transactions_date", "date"),
         Index("ix_transactions_account_date", "account_id", "date"),
@@ -199,6 +265,10 @@ class InstallmentPlan(Base):
     purchase_date: Mapped[date] = mapped_column(Date)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     total_installments: Mapped[int] = mapped_column()
+    # Hora del evento en el dispositivo, no de inserción en el servidor -- ver Account.timestamp.
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
 
     # passive_deletes=True: mismo motivo que Account.cards -- delega el borrado en cascada al
     # ON DELETE CASCADE de installment_items.plan_id en vez de que el ORM intente nullearla.
@@ -268,6 +338,10 @@ class Asset(Base):
     name: Mapped[str] = mapped_column(String(120))
     type: Mapped[AssetType] = mapped_column(pg_enum(AssetType, name="asset_type"))
     currency: Mapped[str] = mapped_column(String(3), default="USD")
+    # Hora del evento en el dispositivo, no de inserción en el servidor -- ver Account.timestamp.
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
 
     __table_args__ = (
         UniqueConstraint("user_id", "ticker", "type", name="uq_asset_user_ticker_type"),
@@ -291,6 +365,10 @@ class InvestmentTransaction(Base):
     price: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     date: Mapped[date] = mapped_column(Date)
+    # Hora del evento en el dispositivo, no de inserción en el servidor -- ver Account.timestamp.
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
 
     __table_args__ = (CheckConstraint("quantity > 0", name="ck_inv_qty_positive"),)
 
@@ -303,6 +381,13 @@ class ExchangeRate(Base):
     to_currency: Mapped[str] = mapped_column(String(3))
     rate: Mapped[Decimal] = mapped_column(Numeric(18, 6))
     date: Mapped[date] = mapped_column(Date)
+    # Hora del evento en el dispositivo, no de inserción en el servidor -- ver Account.timestamp.
+    # Además de la carga móvil offline, sirve para desempatar un upsert concurrente: si dos
+    # dispositivos cargan (o corrigen) la cotización del mismo día mientras ambos están
+    # offline, al sincronizar gana la que tenga el `timestamp` más reciente.
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
 
     __table_args__ = (
         UniqueConstraint("from_currency", "to_currency", "date", name="uq_fx_rate_day"),

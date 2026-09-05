@@ -26,6 +26,9 @@ async def apply_transaction_balance_effect(
     session: AsyncSession, transaction: Transaction, card: Card | None, *, sign: int = 1
 ) -> None:
     """Aplica (sign=1) o revierte (sign=-1) el efecto de `transaction` sobre el/los saldos."""
+    if transaction.account_id is None:
+        return  # gasto fijo sin cuenta asociada: no hay saldo que tocar
+
     if transaction.type == TransactionType.TRANSFER:
         await adjust_balance(session, transaction.account_id, -transaction.amount * sign)
         await adjust_balance(

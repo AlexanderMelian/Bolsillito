@@ -52,11 +52,14 @@ class TransactionRead(BaseModel):
 
     id: int
     type: TransactionType
-    account_id: int
+    # Nullable porque una instancia generada por un RecurringExpense sin cuenta no tiene una --
+    # la carga manual (TransactionCreate.account_id) sigue exigiéndola, esto no cambia eso.
+    account_id: int | None
     destination_account_id: int | None
     card_id: int | None
     category_id: int | None
     installment_plan_id: int | None
+    recurring_expense_id: int | None
     amount: Decimal
     currency: str
     date: date_type

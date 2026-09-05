@@ -27,6 +27,24 @@ const KINDS: { value: TransactionType; label: string }[] = [
   { value: 'transfer', label: 'Transferencia' },
 ]
 
+const ICONS: { value: string; label: string }[] = [
+  { value: '🍔', label: 'Comida' },
+  { value: '🚗', label: 'Transporte' },
+  { value: '🏠', label: 'Vivienda' },
+  { value: '💡', label: 'Servicios' },
+  { value: '🏥', label: 'Salud' },
+  { value: '🎬', label: 'Ocio' },
+  { value: '🛍️', label: 'Compras' },
+  { value: '📚', label: 'Educación' },
+  { value: '✈️', label: 'Viajes' },
+  { value: '🐶', label: 'Mascotas' },
+  { value: '💪', label: 'Gimnasio' },
+  { value: '🎁', label: 'Regalos' },
+  { value: '💰', label: 'Sueldo' },
+  { value: '📈', label: 'Inversiones' },
+  { value: '📦', label: 'Otros' },
+]
+
 export function CategoryFormDialog() {
   const isOpen = useUiStore((state) => state.isCategoryModalOpen)
   const close = useUiStore((state) => state.closeCategoryModal)
@@ -79,12 +97,18 @@ export function CategoryFormDialog() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="category-icon">Ícono (opcional)</Label>
-              <Input
-                id="category-icon"
-                value={icon}
-                onChange={(event) => setIcon(event.target.value)}
-                placeholder="🍔"
-              />
+              <Select value={icon || undefined} onValueChange={(value) => setIcon(value)}>
+                <SelectTrigger id="category-icon" className="w-full">
+                  <SelectValue placeholder="Elegir ícono" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ICONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.value} {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 

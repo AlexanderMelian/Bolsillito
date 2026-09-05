@@ -4,6 +4,7 @@ const LINKS = [
   { to: '/', label: 'Resumen', end: true },
   { to: '/cuentas', label: 'Cuentas' },
   { to: '/movimientos', label: 'Movimientos' },
+  { to: '/gastos-fijos', label: 'Gastos fijos' },
   { to: '/inversiones', label: 'Inversiones' },
 ]
 
@@ -17,9 +18,9 @@ export function Nav() {
               to={link.to}
               end={link.end}
               className={({ isActive }) =>
-                `block px-3 py-3 text-center text-sm font-medium sm:rounded-md sm:py-2 ${
+                `block px-3 py-3 text-center text-sm font-medium sm:rounded-lg sm:py-2 ${
                   isActive
-                    ? 'text-foreground sm:bg-muted'
+                    ? 'text-primary sm:bg-primary/10'
                     : 'text-muted-foreground hover:text-foreground'
                 }`
               }

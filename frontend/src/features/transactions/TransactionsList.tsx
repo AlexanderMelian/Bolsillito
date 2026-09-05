@@ -18,8 +18,10 @@ export function TransactionsList() {
   const openTransactionModal = useUiStore((state) => state.openTransactionModal)
   const openInstallmentModal = useUiStore((state) => state.openInstallmentModal)
 
-  const accountName = (accountId: number) =>
-    accounts?.find((account) => account.id === accountId)?.name ?? `Cuenta #${accountId}`
+  const accountName = (accountId: number | null) =>
+    accountId === null
+      ? 'Sin cuenta'
+      : (accounts?.find((account) => account.id === accountId)?.name ?? `Cuenta #${accountId}`)
 
   return (
     <section className="space-y-3">
@@ -50,6 +52,11 @@ export function TransactionsList() {
               <p className="truncate font-medium">
                 {transaction.description ||
                   (transaction.type === 'transfer' ? 'Transferencia' : 'Movimiento')}
+                {transaction.recurring_expense_id !== null && (
+                  <span className="bg-primary/10 text-primary ml-2 rounded px-1.5 py-0.5 text-xs">
+                    Fijo
+                  </span>
+                )}
               </p>
               <p className="text-muted-foreground truncate text-xs">
                 {accountName(transaction.account_id)}

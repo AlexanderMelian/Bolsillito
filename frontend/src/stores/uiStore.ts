@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-import type { Account, Card } from '@/lib/api/types'
+import type { Account, Card, RecurringExpense } from '@/lib/api/types'
 
 interface UiState {
   isAccountModalOpen: boolean
@@ -35,6 +35,11 @@ interface UiState {
   isInvestmentModalOpen: boolean
   openInvestmentModal: () => void
   closeInvestmentModal: () => void
+
+  isRecurringExpenseModalOpen: boolean
+  editingRecurringExpense: RecurringExpense | null
+  openRecurringExpenseModal: (expense?: RecurringExpense) => void
+  closeRecurringExpenseModal: () => void
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -71,4 +76,11 @@ export const useUiStore = create<UiState>((set) => ({
   isInvestmentModalOpen: false,
   openInvestmentModal: () => set({ isInvestmentModalOpen: true }),
   closeInvestmentModal: () => set({ isInvestmentModalOpen: false }),
+
+  isRecurringExpenseModalOpen: false,
+  editingRecurringExpense: null,
+  openRecurringExpenseModal: (expense) =>
+    set({ isRecurringExpenseModalOpen: true, editingRecurringExpense: expense ?? null }),
+  closeRecurringExpenseModal: () =>
+    set({ isRecurringExpenseModalOpen: false, editingRecurringExpense: null }),
 }))

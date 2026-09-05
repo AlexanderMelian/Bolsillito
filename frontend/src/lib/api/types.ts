@@ -84,11 +84,13 @@ export interface CategoryCreateInput {
 export interface Transaction {
   id: number
   type: TransactionType
-  account_id: number
+  // null: instancia generada por un RecurringExpense sin cuenta asociada.
+  account_id: number | null
   destination_account_id: number | null
   card_id: number | null
   category_id: number | null
   installment_plan_id: number | null
+  recurring_expense_id: number | null
   amount: string
   currency: string
   date: string
@@ -105,6 +107,42 @@ export interface TransactionCreateInput {
   currency?: string
   date: string
   description?: string | null
+}
+
+export interface RecurringExpense {
+  id: number
+  account_id: number | null
+  category_id: number | null
+  description: string
+  amount: string
+  currency: string
+  day_of_month: number
+  start_date: string
+  last_generated_on: string | null
+  is_active: boolean
+}
+
+export interface RecurringExpenseCreateInput {
+  account_id?: number | null
+  category_id?: number | null
+  description: string
+  amount: string
+  currency?: string
+  day_of_month: number
+  start_date: string
+}
+
+export interface RecurringExpenseUpdateInput {
+  account_id?: number | null
+  category_id?: number | null
+  description?: string
+  amount?: string
+  day_of_month?: number
+  is_active?: boolean
+}
+
+export interface RecurringExpenseSyncResult {
+  generated_count: number
 }
 
 export interface InstallmentItem {
